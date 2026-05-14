@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         ALH Semi-Auto
+// @name         ALH Semi-Auto 2
 // @namespace    http://tampermonkey.net/
 // @version      4.0
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
