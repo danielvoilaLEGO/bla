@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      3.6
+// @version      3.8
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -1121,10 +1121,25 @@
 
             if (page === "step1") {
                 if (!sessionStorage.getItem("cookiesCleared")) {
-                    console.log("AutoFlow: On step1, clearing cookies first...");
+                    console.log("AutoFlow: On step1, clearing session via new tab...");
+                    // Save all session data to localStorage so the new tab can restore it
+                    const transfer = {};
+                    for (let i = 0; i < sessionStorage.length; i++) {
+                        const key = sessionStorage.key(i);
+                        transfer[key] = sessionStorage.getItem(key);
+                    }
+                    transfer["cookiesCleared"] = "1";
+                    localStorage.setItem("alhTransfer", JSON.stringify(transfer));
+                    // Clear cookies as much as possible
                     await clearAllCookies();
+                    console.log("AutoFlow: Opening new tab and closing this one...");
+                    const url = window.location.href;
+                    window.open(url, "_blank");
+                    window.close();
+                    // Fallback: if window.close() doesn't work (not opened by script), reload instead
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    console.log("AutoFlow: window.close() didn't work, falling back to reload");
                     sessionStorage.setItem("cookiesCleared", "1");
-                    console.log("AutoFlow: Cookies cleared, reloading page...");
                     location.reload();
                     return;
                 }
@@ -1819,6 +1834,45 @@
     }
 
     // --- Initialize ---
+    // Restore session data from localStorage if transferred from a previous tab
+    const _alhTransferRaw = localStorage.getItem("alhTransfer");
+    if (_alhTransferRaw) {
+        try {
+            const _transfer = JSON.parse(_alhTransferRaw);
+            for (const [key, value] of Object.entries(_transfer)) {
+                sessionStorage.setItem(key, value);
+            }
+            console.log("Init: Restored session data from previous tab (", Object.keys(_transfer).length, "keys)");
+            // Re-read variables that were loaded before transfer
+            autoFlow = sessionStorage.getItem("autoFlow") === "true";
+            dateValue = sessionStorage.getItem("dateValue") || "";
+            numTickets = sessionStorage.getItem("numTickets") || "1";
+            captchaSolved = sessionStorage.getItem("captchaSolved") === "true";
+            ticketsAdded = sessionStorage.getItem("ticketsAdded") === "true";
+            manualCaptcha = sessionStorage.getItem("manualCaptcha") === "true";
+            numTeenTickets = sessionStorage.getItem("numTeenTickets") || "0";
+            numChildTickets = sessionStorage.getItem("numChildTickets") || "0";
+            selectedSlot = sessionStorage.getItem("selectedSlot") || "";
+            firebaseFetched = sessionStorage.getItem("firebaseFetched") === "true";
+            firebaseDocId = sessionStorage.getItem("firebaseDocId") || "";
+            emailVerified = sessionStorage.getItem("emailVerified") === "true";
+            findBestSlot = sessionStorage.getItem("findBestSlot") !== "false";
+            bestSlotRank = parseInt(sessionStorage.getItem("bestSlotRank"), 10) || 1;
+            preferredTime = sessionStorage.getItem("preferredTime") || "";
+            try {
+                const stored = sessionStorage.getItem("ticketHolders");
+                if (stored) firebaseDetails = JSON.parse(stored);
+            } catch(e) {}
+            try {
+                const storedExcl = sessionStorage.getItem("excludedDates");
+                if (storedExcl) excludedDates = JSON.parse(storedExcl);
+            } catch(e) {}
+        } catch (e) {
+            console.log("Init: Error restoring transfer data:", e);
+        }
+        localStorage.removeItem("alhTransfer");
+    }
+
     const wait = setInterval(async () => {
 
         if (document.body) {
