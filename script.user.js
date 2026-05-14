@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      55.9
+// @version      56.0
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -83,6 +83,24 @@
     console.log("captchaSolved:", captchaSolved);
     console.log("ticketsAdded:", ticketsAdded);
     console.log("====================================");
+
+    // --- Keep tab alive in background (prevents Chrome timer throttling) ---
+    let _keepAliveCtx = null;
+    function keepTabAlive() {
+        if (_keepAliveCtx) return; // already running
+        try {
+            _keepAliveCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = _keepAliveCtx.createOscillator();
+            const gain = _keepAliveCtx.createGain();
+            gain.gain.value = 0.001; // virtually silent
+            oscillator.connect(gain);
+            gain.connect(_keepAliveCtx.destination);
+            oscillator.start();
+            console.log("KeepAlive: Silent audio started — tab will stay active in background");
+        } catch (e) {
+            console.log("KeepAlive: Could not start AudioContext:", e);
+        }
+    }
 
     // --- Wait for element utility ---
     function waitForElement(selector, timeout = 15000) {
@@ -1021,6 +1039,7 @@
             return;
         }
         running = true;
+        keepTabAlive();
 
         try {
 
@@ -1149,12 +1168,6 @@
 
             if (page === "step1") {
                 if (!sessionStorage.getItem("cookiesCleared")) {
-                    ticketsAdded = false;
-                    captchaSolved = false;
-                    emailVerified = false;
-                    sessionStorage.removeItem("emailVerified");
-                    sessionStopwatchStart = 0;
-                    sessionStorage.removeItem("sessionStopwatchStart");
                     console.log("AutoFlow: On step1, clearing session via new tab...");
                     
                     // Save all session data to localStorage so the new tab can restore it
