@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      5.0
+// @version      5.1
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -1309,6 +1309,9 @@
                     return;
                 }
                 console.log("AutoFlow: Calendar found!");
+
+                // Reset cookiesCleared so next step1 visit will clear cookies again
+                sessionStorage.removeItem("cookiesCleared");
 
                 sessionStopwatchStart = Date.now();
                 sessionStorage.setItem("sessionStopwatchStart", String(sessionStopwatchStart));
