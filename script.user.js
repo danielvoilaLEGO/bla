@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      3.3
+// @version      3.5
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -1132,7 +1132,6 @@
                 captchaSolved = false;
                 emailVerified = false;
                 sessionStorage.removeItem("emailVerified");
-                sessionStorage.removeItem("cookiesCleared");
                 sessionStopwatchStart = 0;
                 sessionStorage.removeItem("sessionStopwatchStart");
                 console.log("AutoFlow: Stopwatch reset (step1 reached)");
@@ -1688,6 +1687,7 @@
                 ticketsAdded = false;
                 sessionStorage.setItem("ticketsAdded", "false");
                 sessionStorage.removeItem("flowStep");
+                sessionStorage.removeItem("cookiesCleared");
             }
 
             const btn = document.getElementById("btnAutoFlow");
@@ -1766,6 +1766,7 @@
             emailVerified = false;
             sessionStorage.removeItem("emailVerified");
             sessionStorage.removeItem("flowStep");
+            sessionStorage.removeItem("cookiesCleared");
 
             autoFlow = false;
             sessionStorage.setItem("autoFlow", "false");
