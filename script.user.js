@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      3.8
+// @version      3.5
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_cookie
+// @grant        window.close
 // @connect      2captcha.com
 // @connect      firestore.googleapis.com
 // @connect      ntfy.sh
@@ -1135,12 +1136,11 @@
                     console.log("AutoFlow: Opening new tab and closing this one...");
                     const url = window.location.href;
                     window.open(url, "_blank");
+                    // Try to close; browsers block this for user-opened tabs
                     window.close();
-                    // Fallback: if window.close() doesn't work (not opened by script), reload instead
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    console.log("AutoFlow: window.close() didn't work, falling back to reload");
-                    sessionStorage.setItem("cookiesCleared", "1");
-                    location.reload();
+                    // If still here after 500ms, navigate to about:blank to kill the old tab
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    location.replace("about:blank");
                     return;
                 }
                 ticketsAdded = false;
