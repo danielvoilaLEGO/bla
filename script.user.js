@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      5.1
+// @version      5.3
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -1419,6 +1419,8 @@
                         console.log("AutoFlow: Session timeout reached, redirecting...");
                         sessionStopwatchStart = 0;
                         sessionStorage.removeItem("sessionStopwatchStart");
+                        // Mark cookies as already cleared so step1 won't do new-tab dance again
+                        sessionStorage.setItem("cookiesCleared", "1");
                         location.href = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
                         return;
                     }
