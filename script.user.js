@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      3.1
+// @version      3.2
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
+// @grant        GM_cookie
 // @connect      2captcha.com
 // @connect      firestore.googleapis.com
 // @connect      ntfy.sh
@@ -408,42 +409,32 @@
         }
     }
 
-    // --- Clear all cookies for the domain ---
+    // --- Clear all cookies for the domain (uses GM_cookie to also remove HttpOnly cookies) ---
     async function clearAllCookies() {
-    const cookies = document.cookie.split(";");
-
-    const domains = [
-        "",
-        "alhambra-patronato.es",
-        ".alhambra-patronato.es",
-        "compratickets.alhambra-patronato.es",
-        ".compratickets.alhambra-patronato.es"
-    ];
-
-    const paths = ["/", ""];
-
-    for (const cookie of cookies) {
-        const name = cookie.split("=")[0].trim();
-
-        if (!name) continue;
-
-        for (const domain of domains) {
-            for (const path of paths) {
-                let cookieStr = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
-
-                if (path) {
-                    cookieStr += `; path=${path}`;
+        const url = window.location.href;
+        return new Promise((resolve) => {
+            GM_cookie.list({ url }, (cookies, error) => {
+                if (error || !cookies || cookies.length === 0) {
+                    console.log("ClearCookies: No cookies found or error:", error);
+                    resolve();
+                    return;
                 }
-
-                if (domain) {
-                    cookieStr += `; domain=${domain}`;
+                console.log(`ClearCookies: Found ${cookies.length} cookie(s) to delete`);
+                let deleted = 0;
+                let pending = cookies.length;
+                for (const cookie of cookies) {
+                    GM_cookie.delete({ url, name: cookie.name }, (err) => {
+                        if (!err) deleted++;
+                        pending--;
+                        if (pending === 0) {
+                            console.log(`ClearCookies: Deleted ${deleted}/${cookies.length} cookies`);
+                            resolve();
+                        }
+                    });
                 }
-
-                document.cookie = cookieStr;
-            }
-        }
+            });
+        });
     }
-}
     // --- Login ---
     async function loginUser() {
         const loginBtn = document.getElementById("btnAbrirModal");
