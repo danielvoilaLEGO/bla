@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      5.3
+// @version      5.5
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -914,6 +914,33 @@
         sendBtn.click();
         console.log("EmailVerify: Send button clicked, waiting for email...");
         await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Check for email send error
+        const errorSpan = document.getElementById("ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_lblAvisoValidacionTexto");
+        if (errorSpan && errorSpan.textContent.toLowerCase().includes("error")) {
+            console.log("EmailVerify: ERROR detected — email send failed:", errorSpan.textContent.trim());
+            console.log("EmailVerify: Clearing cookies and restarting via new tab...");
+            // Save session data to localStorage for the new tab
+            const transfer = {};
+            for (let i = 0; i < sessionStorage.length; i++) {
+                const key = sessionStorage.key(i);
+                transfer[key] = sessionStorage.getItem(key);
+            }
+            // Reset captcha/email flags so the new tab retries from captcha
+            transfer["captchaSolved"] = "false";
+            transfer["emailVerified"] = "false";
+            delete transfer["cookiesCleared"];
+            localStorage.setItem("alhTransfer", JSON.stringify(transfer));
+            // Clear cookies
+            await clearAllCookies();
+            console.log("EmailVerify: Opening new tab and closing this one...");
+            const url = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
+            window.open(url, "_blank");
+            window.close();
+            await new Promise(resolve => setTimeout(resolve, 500));
+            location.replace("about:blank");
+            return false;
+        }
 
         // Step 5: Poll Tigrmail for the verification email
         let message;
