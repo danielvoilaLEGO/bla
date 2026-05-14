@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      3.2
+// @version      3.3
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -409,31 +409,85 @@
         }
     }
 
-    // --- Clear all cookies for the domain (uses GM_cookie to also remove HttpOnly cookies) ---
+    // --- Clear all cookies for the domain (tries multiple methods) ---
     async function clearAllCookies() {
-        const url = window.location.href;
-        return new Promise((resolve) => {
-            GM_cookie.list({ url }, (cookies, error) => {
-                if (error || !cookies || cookies.length === 0) {
-                    console.log("ClearCookies: No cookies found or error:", error);
-                    resolve();
-                    return;
-                }
-                console.log(`ClearCookies: Found ${cookies.length} cookie(s) to delete`);
-                let deleted = 0;
-                let pending = cookies.length;
-                for (const cookie of cookies) {
-                    GM_cookie.delete({ url, name: cookie.name }, (err) => {
-                        if (!err) deleted++;
-                        pending--;
-                        if (pending === 0) {
-                            console.log(`ClearCookies: Deleted ${deleted}/${cookies.length} cookies`);
-                            resolve();
+        let totalDeleted = 0;
+
+        // Method 1: GM_cookie (can delete HttpOnly cookies if enabled in Tampermonkey settings)
+        if (typeof GM_cookie !== "undefined" && GM_cookie.list) {
+            try {
+                const gmDeleted = await new Promise((resolve) => {
+                    GM_cookie.list({ url: window.location.href }, (cookies, error) => {
+                        if (error || !cookies || cookies.length === 0) {
+                            console.log("ClearCookies [GM_cookie]: No cookies or error:", error);
+                            resolve(0);
+                            return;
+                        }
+                        console.log(`ClearCookies [GM_cookie]: Found ${cookies.length} cookie(s)`);
+                        let deleted = 0;
+                        let pending = cookies.length;
+                        for (const cookie of cookies) {
+                            GM_cookie.delete({ url: window.location.href, name: cookie.name }, (err) => {
+                                if (!err) deleted++;
+                                else console.log(`ClearCookies [GM_cookie]: Failed to delete '${cookie.name}':`, err);
+                                pending--;
+                                if (pending === 0) {
+                                    console.log(`ClearCookies [GM_cookie]: Deleted ${deleted}/${cookies.length}`);
+                                    resolve(deleted);
+                                }
+                            });
                         }
                     });
+                });
+                totalDeleted += gmDeleted;
+            } catch (e) {
+                console.log("ClearCookies [GM_cookie]: Exception:", e);
+            }
+        } else {
+            console.log("ClearCookies [GM_cookie]: NOT available — enable in Tampermonkey Settings > Config mode: Advanced > Manage cookies: Enabled");
+        }
+
+        // Method 2: cookieStore API (Chrome 87+, can delete cookies with paths but NOT HttpOnly)
+        if (typeof cookieStore !== "undefined" && cookieStore.getAll) {
+            try {
+                const allCookies = await cookieStore.getAll();
+                console.log(`ClearCookies [cookieStore]: Found ${allCookies.length} cookie(s)`);
+                for (const cookie of allCookies) {
+                    try {
+                        await cookieStore.delete({ name: cookie.name, domain: cookie.domain, path: cookie.path });
+                        totalDeleted++;
+                    } catch (e) { /* ignore individual failures */ }
                 }
-            });
-        });
+                console.log(`ClearCookies [cookieStore]: Processed ${allCookies.length} cookies`);
+            } catch (e) {
+                console.log("ClearCookies [cookieStore]: Error:", e);
+            }
+        }
+
+        // Method 3: document.cookie fallback (cannot delete HttpOnly cookies)
+        const docCookies = document.cookie.split(";");
+        const domains = ["", "alhambra-patronato.es", ".alhambra-patronato.es",
+                         "compratickets.alhambra-patronato.es", ".compratickets.alhambra-patronato.es"];
+        const paths = ["/", "", "/reservarEntradas.aspx"];
+        let docDeleted = 0;
+        for (const cookie of docCookies) {
+            const name = cookie.split("=")[0].trim();
+            if (!name) continue;
+            for (const domain of domains) {
+                for (const path of paths) {
+                    let str = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+                    if (path) str += `; path=${path}`;
+                    if (domain) str += `; domain=${domain}`;
+                    document.cookie = str;
+                }
+            }
+            docDeleted++;
+        }
+        console.log(`ClearCookies [document.cookie]: Attempted ${docDeleted} cookie(s)`);
+        totalDeleted += docDeleted;
+
+        console.log(`ClearCookies: Total operations: ${totalDeleted}`);
+        console.log(`ClearCookies: Remaining document.cookie: "${document.cookie}"`);
     }
     // --- Login ---
     async function loginUser() {
