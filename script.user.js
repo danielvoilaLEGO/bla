@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      3.5
+// @version      3.6
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -1143,10 +1143,17 @@
             if (!captchaSolved) {
                 console.log("AutoFlow: STEP 0 - Solve Captcha");
                 console.log("AutoFlow: Looking for IrPaso1 button...");
-                const validateBtn = await waitForElement(
-                    "#ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_btnIrSubPaso1",
-                    15000
-                );
+                let validateBtn;
+                try {
+                    validateBtn = await waitForElement(
+                        "#ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_btnIrSubPaso1",
+                        15000
+                    );
+                } catch (e) {
+                    console.log("AutoFlow: IrSubPaso1 button not found (timeout). Stopping flow.");
+                    running = false;
+                    return;
+                }
                 if (validateBtn) {
                     console.log("AutoFlow: Clicking IrPaso1 to trigger captcha...");
                     validateBtn.click();
