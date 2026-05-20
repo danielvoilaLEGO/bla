@@ -64,8 +64,8 @@
     };
 
     
-    const OPENINBOX_INBOX_ID = "b678abcb-016c-49ca-bbf7-dd4f459df7c3";
-    const LOGIN_EMAIL = "danielvoila05@openinbox.io";
+    const OPENINBOX_INBOX_ID = "c49ea5ea-e084-44bc-94b2-fec7e96023b1";
+    const LOGIN_EMAIL = "danielvoila06@openinbox.io";
     const LOGIN_PASSWORD = "Teodora1992..92";
 
     const FIREBASE_API_KEY = "AIzaSyBniZTfD3dGs8EzNfqLy956djUwMlCsRYo";
