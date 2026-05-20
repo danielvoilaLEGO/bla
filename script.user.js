@@ -63,7 +63,9 @@
         }
     };
 
-    const LOGIN_EMAIL = "danielvoila03@openinbox.io";
+    
+    const OPENINBOX_INBOX_ID = "7f483346-f498-4621-a54a-7bf2af0bf0b9";
+    const LOGIN_EMAIL = "danielvoila04@openinbox.io";
     const LOGIN_PASSWORD = "Teodora1992..92";
 
     const FIREBASE_API_KEY = "AIzaSyBniZTfD3dGs8EzNfqLy956djUwMlCsRYo";
@@ -806,7 +808,6 @@
             });
         });
     }
-    const OPENINBOX_INBOX_ID = "17b887f4-356a-456f-9156-02fab50cfad9";
 
     // --- OpenInbox: Poll for latest email ---
     function openinboxPollEmails(inboxId, sentAfter, maxAttempts = 40, intervalMs = 5000) {
