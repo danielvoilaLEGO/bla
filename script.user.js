@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      60.2
+// @version      5.3
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -22,7 +22,7 @@
     let apiKey2Captcha = "55a718515ab2ad73174833daecbd5366";
     let captchaSolved = sessionStorage.getItem("captchaSolved") === "true";
     let ticketsAdded = sessionStorage.getItem("ticketsAdded") === "true";
-    let manualCaptcha = sessionStorage.getItem("manualCaptcha") === "true";
+    let manualCaptcha = sessionStorage.getItem("manualCaptcha") === "false";
     let manualEmail = sessionStorage.getItem("manualEmail") === "true";
     let numTeenTickets = sessionStorage.getItem("numTeenTickets") || "0";
     let numChildTickets = sessionStorage.getItem("numChildTickets") || "0";
@@ -1203,7 +1203,7 @@
             if (page === "step1") {
                 if (!sessionStorage.getItem("cookiesCleared")) {
                     console.log("AutoFlow: On step1, clearing session via new tab...");
-
+                    
                     // Save all session data to localStorage so the new tab can restore it
                     const transfer = {};
                     for (let i = 0; i < sessionStorage.length; i++) {
