@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      60.1
+// @version      60.2
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -851,11 +851,11 @@
                                 });
                             }
                             if (emails.length > 0) {
-                                // Sort by receivedAt descending to get the latest
+                                // Sort by receivedAt ascending to get the FIRST email after send
                                 emails.sort((a, b) => {
                                     const ta = new Date(a.receivedAt || a.date || a.createdAt || 0).getTime();
                                     const tb = new Date(b.receivedAt || b.date || b.createdAt || 0).getTime();
-                                    return tb - ta;
+                                    return ta - tb;
                                 });
                                 const latest = emails[0];
                                 console.log("OpenInbox: Email received, subject:", latest.subject, "at:", latest.receivedAt);
@@ -1203,7 +1203,7 @@
             if (page === "step1") {
                 if (!sessionStorage.getItem("cookiesCleared")) {
                     console.log("AutoFlow: On step1, clearing session via new tab...");
-                    
+
                     // Save all session data to localStorage so the new tab can restore it
                     const transfer = {};
                     for (let i = 0; i < sessionStorage.length; i++) {
