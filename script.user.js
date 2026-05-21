@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      60.5
+// @version      70.3
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -10,7 +10,7 @@
 // @connect      2captcha.com
 // @connect      firestore.googleapis.com
 // @connect      ntfy.sh
-// @connect      api.openinbox.io
+// @connect      app.mailhook.co
 // ==/UserScript==
 
 (function () {
@@ -42,7 +42,10 @@
     let bestSlotRank = parseInt(sessionStorage.getItem("bestSlotRank"), 10) || 1;
     let preferredTime = sessionStorage.getItem("preferredTime") || "";
     let emailVerified = sessionStorage.getItem("emailVerified") === "true";
-    const OPENINBOX_API_KEY = "tmp_a2fac98728b944918364b56d415f1e26";
+    const MAILHOOK_AGENT_ID = "mh_bm7JdvEM4iXu0WIQl521B7bi";
+    const MAILHOOK_API_KEY = "mh_live_LDypjYUdsj9aQpC3WTeqpbPiRwjQkdz71rc87U5FR1A";
+    let chosenEmail = sessionStorage.getItem("chosenEmail") || "";
+    let chosenEmailAddressId = sessionStorage.getItem("chosenEmailAddressId") || "";
 
     // --- Buffered log intercept ---
     const _alhLogBuffer = [];
@@ -62,11 +65,6 @@
             _alhLogBuffer.push(`[${ts}] ${msg}`);
         }
     };
-
-    
-    const OPENINBOX_INBOX_ID = "b678abcb-016c-49ca-bbf7-dd4f459df7c3";
-    const LOGIN_EMAIL = "danielvoila05@openinbox.io";
-    const LOGIN_PASSWORD = "Teodora1992..92";
 
     const FIREBASE_API_KEY = "AIzaSyBniZTfD3dGs8EzNfqLy956djUwMlCsRYo";
     const FIREBASE_PROJECT_ID = "alh-tickets";
@@ -511,47 +509,7 @@
         console.log(`ClearCookies: Total operations: ${totalDeleted}`);
         console.log(`ClearCookies: Remaining document.cookie: "${document.cookie}"`);
     }
-    // --- Login ---
-    async function loginUser() {
-        const loginBtn = document.getElementById("btnAbrirModal");
-        if (!loginBtn) {
-            console.log("Login: Login button not found, skipping");
-            return;
-        }
-        console.log("Login: Opening login modal...");
-        loginBtn.click();
-        try {
-            await waitForElement("#ctl00_txtLoginEmail", 5000);
-        } catch (e) {
-            console.log("Login: Modal did not appear, skipping login");
-            return;
-        }
-        const emailField = document.getElementById("ctl00_txtLoginEmail");
-        const passwordField = document.getElementById("ctl00_txtLoginPassword");
-        const submitBtn = document.getElementById("ctl00_btnLogin");
-        if (!emailField || !passwordField || !submitBtn) {
-            console.log("Login: Could not find login form fields");
-            return;
-        }
-        emailField.value = LOGIN_EMAIL;
-        passwordField.value = LOGIN_PASSWORD;
-        emailField.dispatchEvent(new Event("input", { bubbles: true }));
-        passwordField.dispatchEvent(new Event("input", { bubbles: true }));
-        console.log("Login: Submitting...");
-        submitBtn.click();
-        await new Promise(resolve => setTimeout(resolve, 3000));
 
-        const loginError = document.getElementById("ctl00_lblLoginError");
-        if (loginError && loginError.textContent.trim().length > 0) {
-            console.log("Login: Error detected:", loginError.textContent.trim());
-            console.log("Login: Clearing cookies and restarting...");
-            await clearAllCookies();
-            location.href = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
-            return;
-        }
-
-        console.log("Login: Done");
-    }
 
     // --- Convert "HH:MM" to minutes since midnight ---
     function timeToMinutes(t) {
@@ -808,69 +766,106 @@
             });
         });
     }
+    // --- Mailhook: List email addresses and pick a random one ---
+    function mailhookListEmailAddresses() {
+        return new Promise((resolve, reject) => {
+            console.log("Mailhook: Fetching email addresses...");
+            GM_xmlhttpRequest({
+                method: "GET",
+                url: "https://app.mailhook.co/api/v1/email_addresses",
+                headers: {
+                    "X-Agent-ID": MAILHOOK_AGENT_ID,
+                    "X-API-Key": MAILHOOK_API_KEY
+                },
+                onload: (response) => {
+                    try {
+                        const parsed = JSON.parse(response.responseText);
+                        const addresses = Array.isArray(parsed.data) ? parsed.data : [];
+                        console.log("Mailhook: Found", addresses.length, "email address(es)");
+                        resolve(addresses);
+                    } catch (e) {
+                        console.log("Mailhook: Parse error listing addresses:", e);
+                        reject(e);
+                    }
+                },
+                onerror: (err) => {
+                    console.log("Mailhook: Network error listing addresses:", err);
+                    reject(err);
+                }
+            });
+        });
+    }
 
-    // --- OpenInbox: Poll for latest email ---
-    function openinboxPollEmails(inboxId, sentAfter, maxAttempts = 40, intervalMs = 5000) {
+    function mailhookPickRandomEmail() {
+        return mailhookListEmailAddresses().then(addresses => {
+            if (addresses.length === 0) {
+                throw new Error("Mailhook: No email addresses available");
+            }
+            const picked = addresses[Math.floor(Math.random() * addresses.length)];
+            const email = picked.attributes ? picked.attributes.email : picked.email;
+            const id = picked.id;
+            console.log("Mailhook: Picked random email:", email, "(id:", id, ")");
+            return { email, id };
+        });
+    }
+
+    // --- Mailhook: Poll for latest inbound email ---
+    function mailhookPollEmails(emailAddressId, sentAfter, maxAttempts = 40, intervalMs = 5000) {
         return new Promise((resolve, reject) => {
             let attempts = 0;
             const sentAfterTime = sentAfter ? new Date(sentAfter).getTime() : 0;
             if (sentAfterTime) {
-                console.log("OpenInbox: Only accepting emails received after:", new Date(sentAfterTime).toISOString());
+                console.log("Mailhook: Only accepting emails received after:", new Date(sentAfterTime).toISOString());
             }
             const poll = () => {
                 attempts++;
-                console.log(`OpenInbox: Polling for email (attempt ${attempts}/${maxAttempts})...`);
+                console.log(`Mailhook: Polling for email (attempt ${attempts}/${maxAttempts})...`);
                 GM_xmlhttpRequest({
                     method: "GET",
-                    url: `https://api.openinbox.io/api/v1/inboxes/${inboxId}/emails`,
-                    headers: { "X-API-Key": OPENINBOX_API_KEY },
+                    url: `https://app.mailhook.co/api/v1/email_addresses/${emailAddressId}/inbound_emails`,
+                    headers: {
+                        "X-Agent-ID": MAILHOOK_AGENT_ID,
+                        "X-API-Key": MAILHOOK_API_KEY
+                    },
                     onload: (response) => {
                         try {
                             if (attempts <= 3 || attempts % 10 === 0) {
-                                console.log("OpenInbox: Raw response status:", response.status);
-                                console.log("OpenInbox: Raw response body:", response.responseText.substring(0, 500));
+                                console.log("Mailhook: Raw response status:", response.status);
+                                console.log("Mailhook: Raw response body:", response.responseText.substring(0, 500));
                             }
-                            const data = JSON.parse(response.responseText);
-                            // Try multiple possible response structures
-                            let emails = [];
-                            if (Array.isArray(data)) {
-                                emails = data;
-                            } else if (Array.isArray(data.emails)) {
-                                emails = data.emails;
-                            } else if (Array.isArray(data.data)) {
-                                emails = data.data;
-                            } else if (Array.isArray(data.items)) {
-                                emails = data.items;
-                            } else if (Array.isArray(data.messages)) {
-                                emails = data.messages;
-                            }
+                            const parsed = JSON.parse(response.responseText);
+                            let emails = Array.isArray(parsed.data) ? parsed.data : [];
                             // Filter: only emails received after sentAfter
                             if (sentAfterTime && emails.length > 0) {
                                 emails = emails.filter(e => {
-                                    const recvTime = new Date(e.receivedAt || e.date || e.createdAt || 0).getTime();
+                                    const attrs = e.attributes || e;
+                                    const recvTime = new Date(attrs.received_at || attrs.receivedAt || attrs.date || attrs.createdAt || 0).getTime();
                                     return recvTime > sentAfterTime;
                                 });
                             }
                             if (emails.length > 0) {
-                                // Sort by receivedAt ascending to get the FIRST email after send
+                                // Sort by received_at ascending to get the FIRST email after send
                                 emails.sort((a, b) => {
-                                    const ta = new Date(a.receivedAt || a.date || a.createdAt || 0).getTime();
-                                    const tb = new Date(b.receivedAt || b.date || b.createdAt || 0).getTime();
+                                    const aa = a.attributes || a;
+                                    const bb = b.attributes || b;
+                                    const ta = new Date(aa.received_at || aa.receivedAt || 0).getTime();
+                                    const tb = new Date(bb.received_at || bb.receivedAt || 0).getTime();
                                     return ta - tb;
                                 });
                                 const latest = emails[0];
-                                console.log("OpenInbox: Email received, subject:", latest.subject, "at:", latest.receivedAt);
+                                const attrs = latest.attributes || latest;
+                                console.log("Mailhook: Email received, subject:", attrs.subject, "at:", attrs.received_at);
                                 resolve(latest);
                             } else {
                                 if (attempts >= maxAttempts) {
-                                    reject(new Error("OpenInbox: Max polling attempts reached"));
+                                    reject(new Error("Mailhook: Max polling attempts reached"));
                                 } else {
                                     setTimeout(poll, intervalMs);
                                 }
                             }
                         } catch (e) {
-                            console.log("OpenInbox: Parse error:", e);
-                            console.log("OpenInbox: Response text:", response.responseText.substring(0, 300));
+                            console.log("Mailhook: Parse error:", e);
+                            console.log("Mailhook: Response text:", response.responseText.substring(0, 300));
                             if (attempts >= maxAttempts) {
                                 reject(e);
                             } else {
@@ -879,7 +874,7 @@
                         }
                     },
                     onerror: (err) => {
-                        console.log("OpenInbox: Poll error:", err);
+                        console.log("Mailhook: Poll error:", err);
                         if (attempts >= maxAttempts) {
                             reject(err);
                         } else {
@@ -892,27 +887,29 @@
         });
     }
 
-    // --- OpenInbox: Get full email content by ID ---
-    function openinboxGetEmail(emailId) {
+    // --- Mailhook: Get full email content by ID ---
+    function mailhookGetEmail(emailAddressId, emailId) {
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: "GET",
-                url: `https://api.openinbox.io/api/v1/emails/${emailId}`,
-                headers: { "X-API-Key": OPENINBOX_API_KEY },
+                url: `https://app.mailhook.co/api/v1/email_addresses/${emailAddressId}/inbound_emails/${emailId}`,
+                headers: {
+                    "X-Agent-ID": MAILHOOK_AGENT_ID,
+                    "X-API-Key": MAILHOOK_API_KEY
+                },
                 onload: (response) => {
                     try {
-                        console.log("OpenInbox: GetEmail response:", response.responseText.substring(0, 500));
+                        console.log("Mailhook: GetEmail response:", response.responseText.substring(0, 500));
                         const parsed = JSON.parse(response.responseText);
-                        // Unwrap { success: true, data: { ... } } envelope
                         const data = parsed.data || parsed;
                         resolve(data);
                     } catch (e) {
-                        console.log("OpenInbox: Get email parse error:", e);
+                        console.log("Mailhook: Get email parse error:", e);
                         reject(e);
                     }
                 },
                 onerror: (err) => {
-                    console.log("OpenInbox: Get email error:", err);
+                    console.log("Mailhook: Get email error:", err);
                     reject(err);
                 }
             });
@@ -923,9 +920,29 @@
     async function performEmailVerification() {
         console.log("EmailVerify: Starting email verification step...");
 
-        // Step 1: Use hardcoded inbox ID
-        const inboxId = OPENINBOX_INBOX_ID;
-        console.log("EmailVerify: Using inbox ID:", inboxId);
+        // Step 1: Pick a random email address from Mailhook
+        let emailAddr, emailAddressId;
+        if (chosenEmail && chosenEmailAddressId) {
+            emailAddr = chosenEmail;
+            emailAddressId = chosenEmailAddressId;
+            console.log("EmailVerify: Using cached email:", emailAddr);
+        } else {
+            try {
+                const picked = await mailhookPickRandomEmail();
+                emailAddr = picked.email;
+                emailAddressId = picked.id;
+                chosenEmail = emailAddr;
+                chosenEmailAddressId = emailAddressId;
+                sessionStorage.setItem("chosenEmail", emailAddr);
+                sessionStorage.setItem("chosenEmailAddressId", emailAddressId);
+                const _dd = document.getElementById("alhDocIdDisplay");
+                if (_dd) _dd.textContent = _dd.textContent.replace(/Email:.*/, `Email: ${emailAddr}`);
+            } catch (e) {
+                console.log("EmailVerify: Failed to pick random email from Mailhook:", e);
+                return false;
+            }
+        }
+        console.log("EmailVerify: Using email:", emailAddr, "(id:", emailAddressId, ")");
 
         // Step 2: Wait for the email input field to appear
         console.log("EmailVerify: Waiting for email input field...");
@@ -937,11 +954,11 @@
             return false;
         }
 
-        // Step 3: Fill in the LOGIN_EMAIL address
-        emailInput.value = LOGIN_EMAIL;
+        // Step 3: Fill in the random Mailhook email address
+        emailInput.value = emailAddr;
         emailInput.dispatchEvent(new Event("input", { bubbles: true }));
         emailInput.dispatchEvent(new Event("change", { bubbles: true }));
-        console.log("EmailVerify: Email filled:", LOGIN_EMAIL);
+        console.log("EmailVerify: Email filled:", emailAddr);
         await new Promise(resolve => setTimeout(resolve, 500));
 
         // Step 4: Click the send button
@@ -984,10 +1001,10 @@
             return false;
         }
 
-        // Step 5: Poll OpenInbox for the verification email (only emails after send)
+        // Step 5: Poll Mailhook for the verification email (only emails after send)
         let emailEntry;
         try {
-            emailEntry = await openinboxPollEmails(inboxId, sentAt);
+            emailEntry = await mailhookPollEmails(emailAddressId, sentAt);
         } catch (e) {
             console.log("EmailVerify: Failed to get verification email:", e);
             return false;
@@ -995,16 +1012,18 @@
 
         // Step 6: Get full email content and extract 6-digit OTP code
         let fullEmail = emailEntry;
-        if (emailEntry.id && !emailEntry.body && !emailEntry.text && !emailEntry.html) {
+        const entryAttrs = emailEntry.attributes || emailEntry;
+        if (emailEntry.id && !entryAttrs.text_body && !entryAttrs.html_body && !entryAttrs.body) {
             try {
-                fullEmail = await openinboxGetEmail(emailEntry.id);
+                fullEmail = await mailhookGetEmail(emailAddressId, emailEntry.id);
             } catch (e) {
                 console.log("EmailVerify: Failed to fetch full email content:", e);
             }
         }
-        const body = fullEmail.body || fullEmail.text || fullEmail.html ||
-                     fullEmail.textBody || fullEmail.htmlBody || fullEmail.content || "";
-        console.log("EmailVerify: Email body keys:", Object.keys(fullEmail).join(", "));
+        const attrs = fullEmail.attributes || fullEmail;
+        const body = attrs.text_body || attrs.html_body || attrs.body || attrs.text || attrs.html ||
+                     attrs.textBody || attrs.htmlBody || attrs.content || "";
+        console.log("EmailVerify: Email body keys:", Object.keys(attrs).join(", "));
         console.log("EmailVerify: Email body preview:", body.substring(0, 300));
         const codeMatch = body.match(/(\d{6})/);
         if (!codeMatch) {
@@ -1664,7 +1683,7 @@
         // Update Doc ID display
         const docIdDisplay = document.getElementById("alhDocIdDisplay");
         if (docIdDisplay) {
-            docIdDisplay.textContent = `Doc ID: ${firebaseDocId || "Not set"}  |  Slot: ${findBestSlot ? `Rank #${bestSlotRank}` : (preferredTime ? `Preferred ${preferredTime}` : "default")}`;
+            docIdDisplay.textContent = `Doc ID: ${firebaseDocId || "Not set"}  |  Slot: ${findBestSlot ? `Rank #${bestSlotRank}` : (preferredTime ? `Preferred ${preferredTime}` : "default")}  |  Email: ${chosenEmail || "not picked yet"}`;
         }
 
         // Inject button UX styles
@@ -1926,6 +1945,10 @@
             sessionStorage.removeItem("excludedDates");
             manualEmail = false;
             sessionStorage.removeItem("manualEmail");
+            chosenEmail = "";
+            chosenEmailAddressId = "";
+            sessionStorage.removeItem("chosenEmail");
+            sessionStorage.removeItem("chosenEmailAddressId");
             document.getElementById("btnAutoFlow").innerText = 'AUTO: OFF';
 
             console.log("RESET: Complete - All flags cleared");
@@ -1961,6 +1984,8 @@
             findBestSlot = sessionStorage.getItem("findBestSlot") !== "false";
             bestSlotRank = parseInt(sessionStorage.getItem("bestSlotRank"), 10) || 1;
             preferredTime = sessionStorage.getItem("preferredTime") || "";
+            chosenEmail = sessionStorage.getItem("chosenEmail") || "";
+            chosenEmailAddressId = sessionStorage.getItem("chosenEmailAddressId") || "";
             try {
                 const stored = sessionStorage.getItem("ticketHolders");
                 if (stored) firebaseDetails = JSON.parse(stored);
@@ -2047,7 +2072,6 @@
             }
             await fetchExcludedDates();
             dismissCookieBanner();
-            await loginUser();
             createPanel();
             // Flush buffered log messages
             const _logDiv = document.getElementById("alhLog");
