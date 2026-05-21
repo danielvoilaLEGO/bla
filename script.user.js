@@ -922,11 +922,6 @@
 
         // Step 1: Pick a random email address from Mailhook
         let emailAddr, emailAddressId;
-        if (chosenEmail && chosenEmailAddressId) {
-            emailAddr = chosenEmail;
-            emailAddressId = chosenEmailAddressId;
-            console.log("EmailVerify: Using cached email:", emailAddr);
-        } else {
             try {
                 const picked = await mailhookPickRandomEmail();
                 emailAddr = picked.email;
@@ -941,7 +936,7 @@
                 console.log("EmailVerify: Failed to pick random email from Mailhook:", e);
                 return false;
             }
-        }
+            
         console.log("EmailVerify: Using email:", emailAddr, "(id:", emailAddressId, ")");
 
         // Step 2: Wait for the email input field to appear
