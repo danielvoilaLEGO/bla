@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      70.5
+// @version      80
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -981,18 +981,19 @@
             transfer["emailVerified"] = "false";
             delete transfer["cookiesCleared"];
             localStorage.setItem("alhTransfer", JSON.stringify(transfer));
-            await clearAllCookies();
-            console.log("EmailVerify: Opening new tab and closing this one...");
-            const url = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=148&gid=449&lg=en&ca=0&m=GENERAL";
-            const newWin = window.open(url, "_blank");
-            if (newWin) {
-                window.close();
-                await new Promise(resolve => setTimeout(resolve, 500));
-                location.replace("about:blank");
-            } else {
-                console.log("EmailVerify: Popup blocked, redirecting current tab instead");
-                location.href = url;
-            }
+            location.reload();
+            // await clearAllCookies();
+            // console.log("EmailVerify: Opening new tab and closing this one...");
+            // const url = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
+            // const newWin = window.open(url, "_blank");
+            // if (newWin) {
+            //     window.close();
+            //     await new Promise(resolve => setTimeout(resolve, 500));
+            //     location.replace("about:blank");
+            // } else {
+            //     console.log("EmailVerify: Popup blocked, redirecting current tab instead");
+            //     location.href = url;
+            // }
             return false;
         }
 
@@ -1104,7 +1105,7 @@
                 console.log("AutoFlow: 403 Forbidden detected, restarting flow in 3s...");
                 running = false;
                 setTimeout(() => {
-                    location.href = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=148&gid=449&lg=en&ca=0&m=GENERAL";
+                    location.href = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
                 }, 3000);
                 return;
             }
@@ -1216,32 +1217,32 @@
             }
 
             if (page === "step1") {
-                if (!sessionStorage.getItem("cookiesCleared")) {
-                    console.log("AutoFlow: On step1, clearing session via new tab...");
+                // if (!sessionStorage.getItem("cookiesCleared")) {
+                //     console.log("AutoFlow: On step1, clearing session via new tab...");
                     
-                    // Save all session data to localStorage so the new tab can restore it
-                    const transfer = {};
-                    for (let i = 0; i < sessionStorage.length; i++) {
-                        const key = sessionStorage.key(i);
-                        transfer[key] = sessionStorage.getItem(key);
-                    }
-                    transfer["cookiesCleared"] = "1";
-                    localStorage.setItem("alhTransfer", JSON.stringify(transfer));
-                    // Clear cookies as much as possible
-                    await clearAllCookies();
-                    console.log("AutoFlow: Opening new tab and closing this one...");
-                    const url = window.location.href;
-                    const newWin = window.open(url, "_blank");
-                    if (newWin) {
-                        window.close();
-                        await new Promise(resolve => setTimeout(resolve, 500));
-                        location.replace("about:blank");
-                    } else {
-                        console.log("AutoFlow: Popup blocked, redirecting current tab instead");
-                        location.href = url;
-                    }
-                    return;
-                }
+                //     // Save all session data to localStorage so the new tab can restore it
+                //     const transfer = {};
+                //     for (let i = 0; i < sessionStorage.length; i++) {
+                //         const key = sessionStorage.key(i);
+                //         transfer[key] = sessionStorage.getItem(key);
+                //     }
+                //     transfer["cookiesCleared"] = "1";
+                //     localStorage.setItem("alhTransfer", JSON.stringify(transfer));
+                //     // Clear cookies as much as possible
+                //     await clearAllCookies();
+                //     console.log("AutoFlow: Opening new tab and closing this one...");
+                //     const url = window.location.href;
+                //     const newWin = window.open(url, "_blank");
+                //     if (newWin) {
+                //         window.close();
+                //         await new Promise(resolve => setTimeout(resolve, 500));
+                //         location.replace("about:blank");
+                //     } else {
+                //         console.log("AutoFlow: Popup blocked, redirecting current tab instead");
+                //         location.href = url;
+                //     }
+                //     return;
+                // }
                 ticketsAdded = false;
                 captchaSolved = false;
                 emailVerified = false;
@@ -1520,7 +1521,7 @@
                         sessionStorage.removeItem("sessionStopwatchStart");
                         // Mark cookies as already cleared so step1 won't do new-tab dance again
                         sessionStorage.setItem("cookiesCleared", "1");
-                        location.href = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=148&gid=449&lg=en&ca=0&m=GENERAL";
+                        location.href = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
                         return;
                     }
 
@@ -1948,7 +1949,7 @@
 
             console.log("RESET: Complete - All flags cleared");
 
-            location.href = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=148&gid=449&lg=en&ca=0&m=GENERAL";
+            location.href = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
         };
     }
 
