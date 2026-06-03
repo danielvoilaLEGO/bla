@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      80
+// @version      90.3
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -10,7 +10,7 @@
 // @connect      2captcha.com
 // @connect      firestore.googleapis.com
 // @connect      ntfy.sh
-// @connect      app.mailhook.co
+// @connect      api.openinbox.io
 // ==/UserScript==
 
 (function () {
@@ -42,8 +42,7 @@
     let bestSlotRank = parseInt(sessionStorage.getItem("bestSlotRank"), 10) || 1;
     let preferredTime = sessionStorage.getItem("preferredTime") || "";
     let emailVerified = sessionStorage.getItem("emailVerified") === "true";
-    const MAILHOOK_AGENT_ID = "mh_bm7JdvEM4iXu0WIQl521B7bi";
-    const MAILHOOK_API_KEY = "mh_live_LDypjYUdsj9aQpC3WTeqpbPiRwjQkdz71rc87U5FR1A";
+    const OPENINBOX_API_KEY = "tmp_a2fac98728b944918364b56d415f1e26";
     let chosenEmail = sessionStorage.getItem("chosenEmail") || "";
     let chosenEmailAddressId = sessionStorage.getItem("chosenEmailAddressId") || "";
 
@@ -766,106 +765,102 @@
             });
         });
     }
-    // --- Mailhook: List email addresses and pick a random one ---
-    function mailhookListEmailAddresses() {
+    // --- OpenInbox: List inboxes and pick a random existing one ---
+    function openinboxListInboxes() {
         return new Promise((resolve, reject) => {
-            console.log("Mailhook: Fetching email addresses...");
+            console.log("OpenInbox: Fetching inboxes...");
             GM_xmlhttpRequest({
                 method: "GET",
-                url: "https://app.mailhook.co/api/v1/email_addresses",
+                url: "https://api.openinbox.io/api/v1/inboxes",
                 headers: {
-                    "X-Agent-ID": MAILHOOK_AGENT_ID,
-                    "X-API-Key": MAILHOOK_API_KEY
+                    "X-API-Key": OPENINBOX_API_KEY
                 },
                 onload: (response) => {
                     try {
                         const parsed = JSON.parse(response.responseText);
-                        const addresses = Array.isArray(parsed.data) ? parsed.data : [];
-                        console.log("Mailhook: Found", addresses.length, "email address(es)");
-                        resolve(addresses);
+                        const inboxes = Array.isArray(parsed.data) ? parsed.data :
+                                        Array.isArray(parsed)      ? parsed      : [];
+                        console.log("OpenInbox: Found", inboxes.length, "inbox(es)");
+                        resolve(inboxes);
                     } catch (e) {
-                        console.log("Mailhook: Parse error listing addresses:", e);
+                        console.log("OpenInbox: Parse error listing inboxes:", e);
                         reject(e);
                     }
                 },
                 onerror: (err) => {
-                    console.log("Mailhook: Network error listing addresses:", err);
+                    console.log("OpenInbox: Network error listing inboxes:", err);
                     reject(err);
                 }
             });
         });
     }
 
-    function mailhookPickRandomEmail() {
-        return mailhookListEmailAddresses().then(addresses => {
-            if (addresses.length === 0) {
-                throw new Error("Mailhook: No email addresses available");
+    function openinboxPickRandomInbox() {
+        return openinboxListInboxes().then(inboxes => {
+            if (inboxes.length === 0) {
+                throw new Error("OpenInbox: No inboxes available");
             }
-            const picked = addresses[Math.floor(Math.random() * addresses.length)];
-            const email = picked.attributes ? picked.attributes.email : picked.email;
+            const picked = inboxes[Math.floor(Math.random() * inboxes.length)];
+            const email = picked.email || (picked.attributes && picked.attributes.email);
             const id = picked.id;
-            console.log("Mailhook: Picked random email:", email, "(id:", id, ")");
+            console.log("OpenInbox: Picked random inbox:", email, "(id:", id, ")");
             return { email, id };
         });
     }
 
-    // --- Mailhook: Poll for latest inbound email ---
-    function mailhookPollEmails(emailAddressId, sentAfter, maxAttempts = 40, intervalMs = 5000) {
+    // --- OpenInbox: Poll for latest inbound email ---
+    function openinboxPollEmails(inboxId, sentAfter, maxAttempts = 40, intervalMs = 5000) {
         return new Promise((resolve, reject) => {
             let attempts = 0;
             const sentAfterTime = sentAfter ? new Date(sentAfter).getTime() : 0;
             if (sentAfterTime) {
-                console.log("Mailhook: Only accepting emails received after:", new Date(sentAfterTime).toISOString());
+                console.log("OpenInbox: Only accepting emails received after:", new Date(sentAfterTime).toISOString());
             }
             const poll = () => {
                 attempts++;
-                console.log(`Mailhook: Polling for email (attempt ${attempts}/${maxAttempts})...`);
+                console.log(`OpenInbox: Polling for email (attempt ${attempts}/${maxAttempts})...`);
                 GM_xmlhttpRequest({
                     method: "GET",
-                    url: `https://app.mailhook.co/api/v1/email_addresses/${emailAddressId}/inbound_emails`,
+                    url: `https://api.openinbox.io/api/v1/inboxes/${inboxId}/emails`,
                     headers: {
-                        "X-Agent-ID": MAILHOOK_AGENT_ID,
-                        "X-API-Key": MAILHOOK_API_KEY
+                        "X-API-Key": OPENINBOX_API_KEY
                     },
                     onload: (response) => {
                         try {
                             if (attempts <= 3 || attempts % 10 === 0) {
-                                console.log("Mailhook: Raw response status:", response.status);
-                                console.log("Mailhook: Raw response body:", response.responseText.substring(0, 500));
+                                console.log("OpenInbox: Raw response status:", response.status);
+                                console.log("OpenInbox: Raw response body:", response.responseText.substring(0, 500));
                             }
                             const parsed = JSON.parse(response.responseText);
-                            let emails = Array.isArray(parsed.data) ? parsed.data : [];
+                            let emails = Array.isArray(parsed.data) ? parsed.data :
+                                         Array.isArray(parsed)      ? parsed      : [];
                             // Filter: only emails received after sentAfter
                             if (sentAfterTime && emails.length > 0) {
                                 emails = emails.filter(e => {
-                                    const attrs = e.attributes || e;
-                                    const recvTime = new Date(attrs.received_at || attrs.receivedAt || attrs.date || attrs.createdAt || 0).getTime();
+                                    const recvTime = new Date(e.receivedAt || e.received_at || e.createdAt || e.date || 0).getTime();
                                     return recvTime > sentAfterTime;
                                 });
                             }
                             if (emails.length > 0) {
-                                // Sort by received_at ascending to get the FIRST email after send
+                                // Sort ascending to get the FIRST email after send
                                 emails.sort((a, b) => {
-                                    const aa = a.attributes || a;
-                                    const bb = b.attributes || b;
-                                    const ta = new Date(aa.received_at || aa.receivedAt || 0).getTime();
-                                    const tb = new Date(bb.received_at || bb.receivedAt || 0).getTime();
+                                    const ta = new Date(a.receivedAt || a.received_at || 0).getTime();
+                                    const tb = new Date(b.receivedAt || b.received_at || 0).getTime();
                                     return ta - tb;
                                 });
                                 const latest = emails[0];
-                                const attrs = latest.attributes || latest;
-                                console.log("Mailhook: Email received, subject:", attrs.subject, "at:", attrs.received_at);
+                                console.log("OpenInbox: Email received, subject:", latest.subject, "at:", latest.receivedAt || latest.received_at);
                                 resolve(latest);
                             } else {
                                 if (attempts >= maxAttempts) {
-                                    reject(new Error("Mailhook: Max polling attempts reached"));
+                                    reject(new Error("OpenInbox: Max polling attempts reached"));
                                 } else {
                                     setTimeout(poll, intervalMs);
                                 }
                             }
                         } catch (e) {
-                            console.log("Mailhook: Parse error:", e);
-                            console.log("Mailhook: Response text:", response.responseText.substring(0, 300));
+                            console.log("OpenInbox: Parse error:", e);
+                            console.log("OpenInbox: Response text:", response.responseText.substring(0, 300));
                             if (attempts >= maxAttempts) {
                                 reject(e);
                             } else {
@@ -874,7 +869,7 @@
                         }
                     },
                     onerror: (err) => {
-                        console.log("Mailhook: Poll error:", err);
+                        console.log("OpenInbox: Poll error:", err);
                         if (attempts >= maxAttempts) {
                             reject(err);
                         } else {
@@ -887,29 +882,28 @@
         });
     }
 
-    // --- Mailhook: Get full email content by ID ---
-    function mailhookGetEmail(emailAddressId, emailId) {
+    // --- OpenInbox: Get full email content by ID ---
+    function openinboxGetEmail(emailId) {
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: "GET",
-                url: `https://app.mailhook.co/api/v1/email_addresses/${emailAddressId}/inbound_emails/${emailId}`,
+                url: `https://api.openinbox.io/api/v1/emails/${emailId}`,
                 headers: {
-                    "X-Agent-ID": MAILHOOK_AGENT_ID,
-                    "X-API-Key": MAILHOOK_API_KEY
+                    "X-API-Key": OPENINBOX_API_KEY
                 },
                 onload: (response) => {
                     try {
-                        console.log("Mailhook: GetEmail response:", response.responseText.substring(0, 500));
+                        console.log("OpenInbox: GetEmail response:", response.responseText.substring(0, 500));
                         const parsed = JSON.parse(response.responseText);
                         const data = parsed.data || parsed;
                         resolve(data);
                     } catch (e) {
-                        console.log("Mailhook: Get email parse error:", e);
+                        console.log("OpenInbox: Get email parse error:", e);
                         reject(e);
                     }
                 },
                 onerror: (err) => {
-                    console.log("Mailhook: Get email error:", err);
+                    console.log("OpenInbox: Get email error:", err);
                     reject(err);
                 }
             });
@@ -920,10 +914,10 @@
     async function performEmailVerification() {
         console.log("EmailVerify: Starting email verification step...");
 
-        // Step 1: Pick a random email address from Mailhook
+        // Step 1: Pick a random inbox from OpenInbox (existing inboxes only)
         let emailAddr, emailAddressId;
             try {
-                const picked = await mailhookPickRandomEmail();
+                const picked = await openinboxPickRandomInbox();
                 emailAddr = picked.email;
                 emailAddressId = picked.id;
                 chosenEmail = emailAddr;
@@ -933,7 +927,7 @@
                 const _dd = document.getElementById("alhDocIdDisplay");
                 if (_dd) _dd.textContent = _dd.textContent.replace(/Email:.*/, `Email: ${emailAddr}`);
             } catch (e) {
-                console.log("EmailVerify: Failed to pick random email from Mailhook:", e);
+                console.log("EmailVerify: Failed to pick random inbox from OpenInbox:", e);
                 return false;
             }
             
@@ -949,7 +943,7 @@
             return false;
         }
 
-        // Step 3: Fill in the random Mailhook email address
+        // Step 3: Fill in the random OpenInbox email address
         emailInput.value = emailAddr;
         emailInput.dispatchEvent(new Event("input", { bubbles: true }));
         emailInput.dispatchEvent(new Event("change", { bubbles: true }));
@@ -997,10 +991,10 @@
             return false;
         }
 
-        // Step 5: Poll Mailhook for the verification email (only emails after send)
+        // Step 5: Poll OpenInbox for the verification email (only emails after send)
         let emailEntry;
         try {
-            emailEntry = await mailhookPollEmails(emailAddressId, sentAt);
+            emailEntry = await openinboxPollEmails(emailAddressId, sentAt);
         } catch (e) {
             console.log("EmailVerify: Failed to get verification email:", e);
             return false;
@@ -1008,18 +1002,16 @@
 
         // Step 6: Get full email content and extract 6-digit OTP code
         let fullEmail = emailEntry;
-        const entryAttrs = emailEntry.attributes || emailEntry;
-        if (emailEntry.id && !entryAttrs.text_body && !entryAttrs.html_body && !entryAttrs.body) {
+        if (emailEntry.id && !emailEntry.textBody && !emailEntry.htmlBody && !emailEntry.body && !emailEntry.text) {
             try {
-                fullEmail = await mailhookGetEmail(emailAddressId, emailEntry.id);
+                fullEmail = await openinboxGetEmail(emailEntry.id);
             } catch (e) {
                 console.log("EmailVerify: Failed to fetch full email content:", e);
             }
         }
-        const attrs = fullEmail.attributes || fullEmail;
-        const body = attrs.text_body || attrs.html_body || attrs.body || attrs.text || attrs.html ||
-                     attrs.textBody || attrs.htmlBody || attrs.content || "";
-        console.log("EmailVerify: Email body keys:", Object.keys(attrs).join(", "));
+        const body = fullEmail.textBody || fullEmail.htmlBody || fullEmail.body || fullEmail.text ||
+                     fullEmail.text_body || fullEmail.html_body || fullEmail.content || "";
+        console.log("EmailVerify: Email body keys:", Object.keys(fullEmail).join(", "));
         console.log("EmailVerify: Email body preview:", body.substring(0, 300));
         const codeMatch = body.match(/(\d{6})/);
         if (!codeMatch) {
