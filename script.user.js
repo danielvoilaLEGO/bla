@@ -1280,18 +1280,19 @@
                 //         }
                 //     }
                 // }
-
+                captchaSolved = true;
+                sessionStorage.setItem("captchaSolved", "true");
                 console.log("AutoFlow: Captcha complete!");
-                console.log("AutoFlow: Clicking Validate again to proceed to email verification...");
-                const irPaso1BtnAfter = document.getElementById(
-                    "ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_btnIrSubPaso1"
-                );
-                if (irPaso1BtnAfter) {
-                    irPaso1BtnAfter.click();
-                    console.log("AutoFlow: Validation clicked successfully");
-                } else {
-                    console.log("AutoFlow: Validation button not found after captcha");
-                }
+                // console.log("AutoFlow: Clicking Validate again to proceed to email verification...");
+                // const irPaso1BtnAfter = document.getElementById(
+                //     "ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_btnIrSubPaso1"
+                // );
+                // if (irPaso1BtnAfter) {
+                //     irPaso1BtnAfter.click();
+                //     console.log("AutoFlow: Validation clicked successfully");
+                // } else {
+                //     console.log("AutoFlow: Validation button not found after captcha");
+                // }
                 await new Promise(resolve => setTimeout(resolve, 3000));
             } else {
                 console.log("AutoFlow: Captcha already solved, skipping");
