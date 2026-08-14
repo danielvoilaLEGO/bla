@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      100.0
+// @version      101.0
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -1162,29 +1162,29 @@
             }
 
             if (page === "step1") {
-                if (!sessionStorage.getItem("cookiesCleared")) {
-                    console.log("AutoFlow: On step1, clearing session via new tab...");
-                    
-                    // Save all session data to localStorage so the new tab can restore it
-                    const transfer = {};
-                    for (let i = 0; i < sessionStorage.length; i++) {
-                        const key = sessionStorage.key(i);
-                        transfer[key] = sessionStorage.getItem(key);
-                    }
-                    transfer["cookiesCleared"] = "1";
-                    localStorage.setItem("alhTransfer", JSON.stringify(transfer));
-                    // Clear cookies as much as possible
-                    await clearAllCookies();
-                    console.log("AutoFlow: Opening new tab and closing this one...");
-                    const url = window.location.href;
-                    window.open(url, "_blank");
-                    // Try to close; browsers block this for user-opened tabs
-                    window.close();
-                    // If still here after 500ms, navigate to about:blank to kill the old tab
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    location.replace("about:blank");
-                    return;
-                }
+                // if (!sessionStorage.getItem("cookiesCleared")) {
+                //     console.log("AutoFlow: On step1, clearing session via new tab...");
+
+                //     // Save all session data to localStorage so the new tab can restore it
+                //     const transfer = {};
+                //     for (let i = 0; i < sessionStorage.length; i++) {
+                //         const key = sessionStorage.key(i);
+                //         transfer[key] = sessionStorage.getItem(key);
+                //     }
+                //     transfer["cookiesCleared"] = "1";
+                //     localStorage.setItem("alhTransfer", JSON.stringify(transfer));
+                //     // Clear cookies as much as possible
+                //     await clearAllCookies();
+                //     console.log("AutoFlow: Opening new tab and closing this one...");
+                //     const url = window.location.href;
+                //     window.open(url, "_blank");
+                //     // Try to close; browsers block this for user-opened tabs
+                //     window.close();
+                //     // If still here after 500ms, navigate to about:blank to kill the old tab
+                //     await new Promise(resolve => setTimeout(resolve, 500));
+                //     location.replace("about:blank");
+                //     return;
+                // }
                 ticketsAdded = false;
                 captchaSolved = false;
                 sessionStopwatchStart = 0;
@@ -1718,7 +1718,7 @@
                 ticketsAdded = false;
                 sessionStorage.setItem("ticketsAdded", "false");
                 sessionStorage.removeItem("flowStep");
-                sessionStorage.removeItem("cookiesCleared");
+                //sessionStorage.removeItem("cookiesCleared");
             }
 
             const btn = document.getElementById("btnAutoFlow");
