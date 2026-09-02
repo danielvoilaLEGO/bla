@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      200.1
+// @version      201
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -68,6 +68,9 @@
     const FIREBASE_API_KEY = "AIzaSyBniZTfD3dGs8EzNfqLy956djUwMlCsRYo";
     const FIREBASE_PROJECT_ID = "alh-tickets";
     const FIREBASE_COLLECTION = "tickets";
+    const BOOKING_DETAILS_COLLECTION = "boking-details";
+
+    let usedPhone = sessionStorage.getItem("usedPhone") || "";
 
     let firebaseDocId = sessionStorage.getItem("firebaseDocId") || "";
     let firebaseDetails = [];
@@ -710,8 +713,7 @@
             return false;
         }
 
-        // Spanish mobile format: 6XXXXXXXX
-        const phone = "6" + Math.floor(Math.random() * 100000000).toString().padStart(8, "0");
+        const phone = getUsedPhone();
 
         console.log(`FillBuyer: Filling buyer ${buyer.firstName} ${buyer.lastName}`);
         await fillText(`${pfx}_txtNombre`,    buyer.firstName);
@@ -721,6 +723,79 @@
         await fillText(`${pfx}_txtTelefono`,  phone);
         console.log("FillBuyer: Done (phone:", phone, ")");
         return true;
+    }
+
+    // --- Get (or generate + persist) the Spanish mobile used for this booking ---
+    function getUsedPhone() {
+        if (!usedPhone) {
+            usedPhone = "6" + Math.floor(Math.random() * 100000000).toString().padStart(8, "0");
+            sessionStorage.setItem("usedPhone", usedPhone);
+        }
+        return usedPhone;
+    }
+
+    // --- Create a booking-details record in Firestore (doc id = firstName-DDMM) ---
+    async function createBookingDetails(holders) {
+        if (!holders || holders.length === 0) {
+            console.log("BookingDetails: No holders, skipping");
+            return false;
+        }
+        const _dv = dateValue || sessionStorage.getItem("dateValue") || "";
+        const bookingDate = _dv ? new Date(2000, 0, 1 + Number(_dv)) : new Date();
+        const dd = String(bookingDate.getDate()).padStart(2, "0");
+        const mm = String(bookingDate.getMonth() + 1).padStart(2, "0");
+        const dateStr = `${dd}/${mm}`;
+
+        const firstName = (holders[0].firstName || "traveler").trim();
+        const safeName = firstName.replace(/[^\w-]/g, "_");
+        const docId = `${safeName}-${dd}${mm}`;
+
+        const email = chosenEmail || sessionStorage.getItem("chosenEmail") || "";
+        const phone = getUsedPhone();
+
+        const travelerValues = holders.map(h => ({
+            mapValue: {
+                fields: {
+                    name:    { stringValue: h.firstName || "" },
+                    surname: { stringValue: h.lastName  || "" }
+                }
+            }
+        }));
+
+        const body = {
+            fields: {
+                travelers: { arrayValue: { values: travelerValues } },
+                date:      { stringValue: dateStr },
+                email:     { stringValue: email },
+                phone:     { stringValue: phone },
+                createdAt: { stringValue: new Date().toISOString() }
+            }
+        };
+
+        const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/${BOOKING_DETAILS_COLLECTION}/${encodeURIComponent(docId)}?key=${FIREBASE_API_KEY}`;
+
+        console.log(`BookingDetails: Saving doc '${docId}' (${holders.length} travelers, email: ${email || "none"}, phone: ${phone})...`);
+        return new Promise((resolve) => {
+            GM_xmlhttpRequest({
+                method: "PATCH",
+                url: url,
+                headers: { "Content-Type": "application/json" },
+                data: JSON.stringify(body),
+                onload: (response) => {
+                    if (response.status >= 200 && response.status < 300) {
+                        console.log(`BookingDetails: Saved doc '${docId}'`);
+                        resolve(true);
+                    } else {
+                        console.log("BookingDetails: Save failed, status", response.status, response.responseText.substring(0, 200));
+                        resolve(false);
+                    }
+                },
+                onerror: (err) => {
+                    console.log("BookingDetails: Network error:", err);
+                    resolve(false);
+                }
+            });
+        });
     }
 
     // --- Detect which booking step the page is currently showing ---
@@ -979,7 +1054,7 @@
                 console.log("EmailVerify: Failed to pick random inbox from OpenInbox:", e);
                 return false;
             }
-            
+
         console.log("EmailVerify: Using email:", emailAddr, "(id:", emailAddressId, ")");
 
         // Step 2: Wait for the email input field to appear
@@ -1024,8 +1099,8 @@
             transfer["emailVerified"] = "false";
             delete transfer["cookiesCleared"];
             localStorage.setItem("alhTransfer", JSON.stringify(transfer));
+            await clearAllCookies();
             location.reload();
-            // await clearAllCookies();
             // console.log("EmailVerify: Opening new tab and closing this one...");
             // const url = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
             // const newWin = window.open(url, "_blank");
@@ -1260,7 +1335,7 @@
             if (page === "step1") {
                 // if (!sessionStorage.getItem("cookiesCleared")) {
                 //     console.log("AutoFlow: On step1, clearing session via new tab...");
-                    
+
                 //     // Save all session data to localStorage so the new tab can restore it
                 //     const transfer = {};
                 //     for (let i = 0; i < sessionStorage.length; i++) {
@@ -1406,6 +1481,12 @@
                         manualEmailResolver = null;
                         if (confirmEmailBtn) confirmEmailBtn.style.display = "none";
                         console.log("AutoFlow: Manual email verification confirmed by user");
+                        const manualEmailField = document.getElementById("ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_txtEmailValidacion");
+                        if (manualEmailField && manualEmailField.value.trim()) {
+                            chosenEmail = manualEmailField.value.trim();
+                            sessionStorage.setItem("chosenEmail", chosenEmail);
+                            console.log("AutoFlow: Captured manual email:", chosenEmail);
+                        }
                         emailVerified = true;
                         sessionStorage.setItem("emailVerified", "true");
                     } else {
@@ -1909,6 +1990,9 @@
             firebaseDetails = data.ticketHolders;
             sessionStorage.setItem("ticketHolders", JSON.stringify(firebaseDetails));
 
+            // Save a booking-details record to Firebase
+            await createBookingDetails(data.ticketHolders);
+
             btnReady("btnFillDetails", "✔ Filled!");
             console.log("FillDetails: Done! You can now click 'Go to Step 4'.");
             setTimeout(() => btnReady("btnFillDetails"), 4000);
@@ -2012,6 +2096,8 @@
             chosenEmailAddressId = "";
             sessionStorage.removeItem("chosenEmail");
             sessionStorage.removeItem("chosenEmailAddressId");
+            usedPhone = "";
+            sessionStorage.removeItem("usedPhone");
             document.getElementById("btnAutoFlow").innerText = 'AUTO: OFF';
 
             console.log("RESET: Complete - All flags cleared");
