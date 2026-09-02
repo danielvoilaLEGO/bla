@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      101.0
+// @version      90.3
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -10,7 +10,7 @@
 // @connect      2captcha.com
 // @connect      firestore.googleapis.com
 // @connect      ntfy.sh
-// @connect      api.tigrmail.com
+// @connect      api.openinbox.io
 // ==/UserScript==
 
 (function () {
@@ -22,7 +22,8 @@
     let apiKey2Captcha = "55a718515ab2ad73174833daecbd5366";
     let captchaSolved = sessionStorage.getItem("captchaSolved") === "true";
     let ticketsAdded = sessionStorage.getItem("ticketsAdded") === "true";
-    let manualCaptcha = sessionStorage.getItem("manualCaptcha") === "true";
+    let manualCaptcha = sessionStorage.getItem("manualCaptcha") === "false";
+    let manualEmail = sessionStorage.getItem("manualEmail") === "true";
     let numTeenTickets = sessionStorage.getItem("numTeenTickets") || "0";
     let numChildTickets = sessionStorage.getItem("numChildTickets") || "0";
     let manualCaptchaResolver = null;
@@ -40,7 +41,10 @@
     let findBestSlot = sessionStorage.getItem("findBestSlot") !== "false";
     let bestSlotRank = parseInt(sessionStorage.getItem("bestSlotRank"), 10) || 1;
     let preferredTime = sessionStorage.getItem("preferredTime") || "";
-    const TIGRMAIL_TOKEN = "i3h3kxwcgbitrfm7ta0cbwjos1c2a55k6jr34r1lgyx0gu9kf8fgxg9rud2mt7et";
+    let emailVerified = sessionStorage.getItem("emailVerified") === "true";
+    const OPENINBOX_API_KEY = "tmp_839cf0f3550744fe8505c23e0d9f16d7";
+    let chosenEmail = sessionStorage.getItem("chosenEmail") || "";
+    let chosenEmailAddressId = sessionStorage.getItem("chosenEmailAddressId") || "";
 
     // --- Buffered log intercept ---
     const _alhLogBuffer = [];
@@ -60,9 +64,6 @@
             _alhLogBuffer.push(`[${ts}] ${msg}`);
         }
     };
-
-    const LOGIN_EMAIL = "danielvoila92@gmail.com";
-    const LOGIN_PASSWORD = "Teodora1992..92";
 
     const FIREBASE_API_KEY = "AIzaSyBniZTfD3dGs8EzNfqLy956djUwMlCsRYo";
     const FIREBASE_PROJECT_ID = "alh-tickets";
@@ -507,47 +508,7 @@
         console.log(`ClearCookies: Total operations: ${totalDeleted}`);
         console.log(`ClearCookies: Remaining document.cookie: "${document.cookie}"`);
     }
-    // --- Login ---
-    async function loginUser() {
-        const loginBtn = document.getElementById("btnAbrirModal");
-        if (!loginBtn) {
-            console.log("Login: Login button not found, skipping");
-            return;
-        }
-        console.log("Login: Opening login modal...");
-        loginBtn.click();
-        try {
-            await waitForElement("#ctl00_txtLoginEmail", 5000);
-        } catch (e) {
-            console.log("Login: Modal did not appear, skipping login");
-            return;
-        }
-        const emailField = document.getElementById("ctl00_txtLoginEmail");
-        const passwordField = document.getElementById("ctl00_txtLoginPassword");
-        const submitBtn = document.getElementById("ctl00_btnLogin");
-        if (!emailField || !passwordField || !submitBtn) {
-            console.log("Login: Could not find login form fields");
-            return;
-        }
-        emailField.value = LOGIN_EMAIL;
-        passwordField.value = LOGIN_PASSWORD;
-        emailField.dispatchEvent(new Event("input", { bubbles: true }));
-        passwordField.dispatchEvent(new Event("input", { bubbles: true }));
-        console.log("Login: Submitting...");
-        submitBtn.click();
-        await new Promise(resolve => setTimeout(resolve, 3000));
 
-        const loginError = document.getElementById("ctl00_lblLoginError");
-        if (loginError && loginError.textContent.trim().length > 0) {
-            console.log("Login: Error detected:", loginError.textContent.trim());
-            console.log("Login: Clearing cookies and restarting...");
-            await clearAllCookies();
-            location.href = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
-            return;
-        }
-
-        console.log("Login: Done");
-    }
 
     // --- Convert "HH:MM" to minutes since midnight ---
     function timeToMinutes(t) {
@@ -804,73 +765,102 @@
             });
         });
     }
-    // --- Tigrmail: Create temporary inbox ---
-    function tigrmailCreateInbox() {
+    // --- OpenInbox: List inboxes and pick a random existing one ---
+    function openinboxListInboxes() {
         return new Promise((resolve, reject) => {
+            console.log("OpenInbox: Fetching inboxes...");
             GM_xmlhttpRequest({
-                method: "POST",
-                url: "https://api.tigrmail.com/v1/inboxes",
+                method: "GET",
+                url: "https://api.openinbox.io/api/v1/inboxes",
                 headers: {
-                    "Authorization": `Bearer ${TIGRMAIL_TOKEN}`,
-                    "Content-Type": "application/json"
+                    "X-API-Key": OPENINBOX_API_KEY
                 },
                 onload: (response) => {
                     try {
-                        const data = JSON.parse(response.responseText);
-                        if (data.inbox) {
-                            console.log("Tigrmail: Inbox created:", data.inbox);
-                            resolve(data.inbox);
-                        } else {
-                            console.log("Tigrmail: Unexpected response:", response.responseText);
-                            reject(new Error("No inbox in response"));
-                        }
+                        const parsed = JSON.parse(response.responseText);
+                        const inboxes = Array.isArray(parsed.data) ? parsed.data :
+                                        Array.isArray(parsed)      ? parsed      : [];
+                        console.log("OpenInbox: Found", inboxes.length, "inbox(es)");
+                        resolve(inboxes);
                     } catch (e) {
-                        console.log("Tigrmail: Parse error:", e);
+                        console.log("OpenInbox: Parse error listing inboxes:", e);
                         reject(e);
                     }
                 },
                 onerror: (err) => {
-                    console.log("Tigrmail: Create inbox error:", err);
+                    console.log("OpenInbox: Network error listing inboxes:", err);
                     reject(err);
                 }
             });
         });
     }
 
-    // --- Tigrmail: Poll for next message ---
-    function tigrmailPollMessage(inbox, maxAttempts = 40, intervalMs = 5000) {
+    function openinboxPickRandomInbox() {
+        return openinboxListInboxes().then(inboxes => {
+            if (inboxes.length === 0) {
+                throw new Error("OpenInbox: No inboxes available");
+            }
+            const picked = inboxes[Math.floor(Math.random() * inboxes.length)];
+            const email = picked.email || (picked.attributes && picked.attributes.email);
+            const id = picked.id;
+            console.log("OpenInbox: Picked random inbox:", email, "(id:", id, ")");
+            return { email, id };
+        });
+    }
+
+    // --- OpenInbox: Poll for latest inbound email ---
+    function openinboxPollEmails(inboxId, sentAfter, maxAttempts = 40, intervalMs = 5000) {
         return new Promise((resolve, reject) => {
             let attempts = 0;
+            const sentAfterTime = sentAfter ? new Date(sentAfter).getTime() : 0;
+            if (sentAfterTime) {
+                console.log("OpenInbox: Only accepting emails received after:", new Date(sentAfterTime).toISOString());
+            }
             const poll = () => {
                 attempts++;
-                console.log(`Tigrmail: Polling for message (attempt ${attempts}/${maxAttempts})...`);
+                console.log(`OpenInbox: Polling for email (attempt ${attempts}/${maxAttempts})...`);
                 GM_xmlhttpRequest({
                     method: "GET",
-                    url: `https://api.tigrmail.com/v1/messages?inbox=${encodeURIComponent(inbox)}`,
+                    url: `https://api.openinbox.io/api/v1/inboxes/${inboxId}/emails`,
                     headers: {
-                        "Authorization": `Bearer ${TIGRMAIL_TOKEN}`
+                        "X-API-Key": OPENINBOX_API_KEY
                     },
                     onload: (response) => {
                         try {
-                            const data = JSON.parse(response.responseText);
-                            if (data.message) {
-                                console.log("Tigrmail: Message received, subject:", data.message.subject);
-                                resolve(data.message);
-                            } else if (data.code === "no_message" || data.error) {
-                                if (attempts >= maxAttempts) {
-                                    reject(new Error("Tigrmail: Max polling attempts reached"));
-                                } else {
-                                    setTimeout(poll, intervalMs);
-                                }
+                            if (attempts <= 3 || attempts % 10 === 0) {
+                                console.log("OpenInbox: Raw response status:", response.status);
+                                console.log("OpenInbox: Raw response body:", response.responseText.substring(0, 500));
+                            }
+                            const parsed = JSON.parse(response.responseText);
+                            let emails = Array.isArray(parsed.data) ? parsed.data :
+                                         Array.isArray(parsed)      ? parsed      : [];
+                            // Filter: only emails received after sentAfter
+                            if (sentAfterTime && emails.length > 0) {
+                                emails = emails.filter(e => {
+                                    const recvTime = new Date(e.receivedAt || e.received_at || e.createdAt || e.date || 0).getTime();
+                                    return recvTime > sentAfterTime;
+                                });
+                            }
+                            if (emails.length > 0) {
+                                // Sort ascending to get the FIRST email after send
+                                emails.sort((a, b) => {
+                                    const ta = new Date(a.receivedAt || a.received_at || 0).getTime();
+                                    const tb = new Date(b.receivedAt || b.received_at || 0).getTime();
+                                    return ta - tb;
+                                });
+                                const latest = emails[0];
+                                console.log("OpenInbox: Email received, subject:", latest.subject, "at:", latest.receivedAt || latest.received_at);
+                                resolve(latest);
                             } else {
                                 if (attempts >= maxAttempts) {
-                                    reject(new Error("Tigrmail: Max polling attempts reached"));
+                                    reject(new Error("OpenInbox: Max polling attempts reached"));
                                 } else {
                                     setTimeout(poll, intervalMs);
                                 }
                             }
                         } catch (e) {
-                            console.log("Tigrmail: Parse error:", e);
+                            console.log("OpenInbox: Parse error:", e);
+                            console.log("OpenInbox: Response text:", response.responseText.substring(0, 300));
                             if (attempts >= maxAttempts) {
                                 reject(e);
                             } else {
@@ -879,7 +869,7 @@
                         }
                     },
                     onerror: (err) => {
-                        console.log("Tigrmail: Poll error:", err);
+                        console.log("OpenInbox: Poll error:", err);
                         if (attempts >= maxAttempts) {
                             reject(err);
                         } else {
@@ -892,18 +882,56 @@
         });
     }
 
+    // --- OpenInbox: Get full email content by ID ---
+    function openinboxGetEmail(emailId) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: "GET",
+                url: `https://api.openinbox.io/api/v1/emails/${emailId}`,
+                headers: {
+                    "X-API-Key": OPENINBOX_API_KEY
+                },
+                onload: (response) => {
+                    try {
+                        console.log("OpenInbox: GetEmail response:", response.responseText.substring(0, 500));
+                        const parsed = JSON.parse(response.responseText);
+                        const data = parsed.data || parsed;
+                        resolve(data);
+                    } catch (e) {
+                        console.log("OpenInbox: Get email parse error:", e);
+                        reject(e);
+                    }
+                },
+                onerror: (err) => {
+                    console.log("OpenInbox: Get email error:", err);
+                    reject(err);
+                }
+            });
+        });
+    }
+
     // --- Email Verification Step (after captcha, before calendar) ---
     async function performEmailVerification() {
         console.log("EmailVerify: Starting email verification step...");
 
-        // Step 1: Create a Tigrmail inbox
-        let inboxEmail;
-        try {
-            inboxEmail = await tigrmailCreateInbox();
-        } catch (e) {
-            console.log("EmailVerify: Failed to create inbox:", e);
-            return false;
-        }
+        // Step 1: Pick a random inbox from OpenInbox (existing inboxes only)
+        let emailAddr, emailAddressId;
+            try {
+                const picked = await openinboxPickRandomInbox();
+                emailAddr = picked.email;
+                emailAddressId = picked.id;
+                chosenEmail = emailAddr;
+                chosenEmailAddressId = emailAddressId;
+                sessionStorage.setItem("chosenEmail", emailAddr);
+                sessionStorage.setItem("chosenEmailAddressId", emailAddressId);
+                const _dd = document.getElementById("alhDocIdDisplay");
+                if (_dd) _dd.textContent = _dd.textContent.replace(/Email:.*/, `Email: ${emailAddr}`);
+            } catch (e) {
+                console.log("EmailVerify: Failed to pick random inbox from OpenInbox:", e);
+                return false;
+            }
+            
+        console.log("EmailVerify: Using email:", emailAddr, "(id:", emailAddressId, ")");
 
         // Step 2: Wait for the email input field to appear
         console.log("EmailVerify: Waiting for email input field...");
@@ -915,11 +943,11 @@
             return false;
         }
 
-        // Step 3: Fill in the Tigrmail email address
-        emailInput.value = inboxEmail;
+        // Step 3: Fill in the random OpenInbox email address
+        emailInput.value = emailAddr;
         emailInput.dispatchEvent(new Event("input", { bubbles: true }));
         emailInput.dispatchEvent(new Event("change", { bubbles: true }));
-        console.log("EmailVerify: Email filled:", inboxEmail);
+        console.log("EmailVerify: Email filled:", emailAddr);
         await new Promise(resolve => setTimeout(resolve, 500));
 
         // Step 4: Click the send button
@@ -928,8 +956,9 @@
             console.log("EmailVerify: Send button not found");
             return false;
         }
+        const sentAt = new Date().toISOString();
         sendBtn.click();
-        console.log("EmailVerify: Send button clicked, waiting for email...");
+        console.log("EmailVerify: Send button clicked at", sentAt, ", waiting for email...");
         await new Promise(resolve => setTimeout(resolve, 2000));
 
         // Check for email send error
@@ -937,42 +966,57 @@
         if (errorSpan && errorSpan.textContent.toLowerCase().includes("error")) {
             console.log("EmailVerify: ERROR detected — email send failed:", errorSpan.textContent.trim());
             console.log("EmailVerify: Clearing cookies and restarting via new tab...");
-            // Save session data to localStorage for the new tab
             const transfer = {};
             for (let i = 0; i < sessionStorage.length; i++) {
                 const key = sessionStorage.key(i);
                 transfer[key] = sessionStorage.getItem(key);
             }
-            // Reset captcha/email flags so the new tab retries from captcha
             transfer["captchaSolved"] = "false";
+            transfer["emailVerified"] = "false";
             delete transfer["cookiesCleared"];
             localStorage.setItem("alhTransfer", JSON.stringify(transfer));
-            // Clear cookies
-            await clearAllCookies();
-            console.log("EmailVerify: Opening new tab and closing this one...");
-            const url = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
-            window.open(url, "_blank");
-            window.close();
-            await new Promise(resolve => setTimeout(resolve, 500));
-            location.replace("about:blank");
+            location.reload();
+            // await clearAllCookies();
+            // console.log("EmailVerify: Opening new tab and closing this one...");
+            // const url = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
+            // const newWin = window.open(url, "_blank");
+            // if (newWin) {
+            //     window.close();
+            //     await new Promise(resolve => setTimeout(resolve, 500));
+            //     location.replace("about:blank");
+            // } else {
+            //     console.log("EmailVerify: Popup blocked, redirecting current tab instead");
+            //     location.href = url;
+            // }
             return false;
         }
 
-        // Step 5: Poll Tigrmail for the verification email
-        let message;
+        // Step 5: Poll OpenInbox for the verification email (only emails after send)
+        let emailEntry;
         try {
-            message = await tigrmailPollMessage(inboxEmail);
+            emailEntry = await openinboxPollEmails(emailAddressId, sentAt);
         } catch (e) {
             console.log("EmailVerify: Failed to get verification email:", e);
             return false;
         }
 
-        // Step 6: Extract 6-digit OTP code from the email body
-        const body = message.body || "";
+        // Step 6: Get full email content and extract 6-digit OTP code
+        let fullEmail = emailEntry;
+        if (emailEntry.id && !emailEntry.textBody && !emailEntry.htmlBody && !emailEntry.body && !emailEntry.text) {
+            try {
+                fullEmail = await openinboxGetEmail(emailEntry.id);
+            } catch (e) {
+                console.log("EmailVerify: Failed to fetch full email content:", e);
+            }
+        }
+        const body = fullEmail.textBody || fullEmail.htmlBody || fullEmail.body || fullEmail.text ||
+                     fullEmail.text_body || fullEmail.html_body || fullEmail.content || "";
+        console.log("EmailVerify: Email body keys:", Object.keys(fullEmail).join(", "));
+        console.log("EmailVerify: Email body preview:", body.substring(0, 300));
         const codeMatch = body.match(/(\d{6})/);
         if (!codeMatch) {
             console.log("EmailVerify: Could not extract OTP code from email body");
-            console.log("EmailVerify: Email body:", body.substring(0, 500));
+            console.log("EmailVerify: Full email object:", JSON.stringify(fullEmail).substring(0, 800));
             return false;
         }
         const otpCode = codeMatch[1];
@@ -1010,6 +1054,9 @@
             console.log("EmailVerify: btnIrPaso1 not found after validation, might have failed:", e);
             return false;
         }
+
+        emailVerified = true;
+        sessionStorage.setItem("emailVerified", "true");
         return true;
     }
 
@@ -1164,7 +1211,7 @@
             if (page === "step1") {
                 // if (!sessionStorage.getItem("cookiesCleared")) {
                 //     console.log("AutoFlow: On step1, clearing session via new tab...");
-
+                    
                 //     // Save all session data to localStorage so the new tab can restore it
                 //     const transfer = {};
                 //     for (let i = 0; i < sessionStorage.length; i++) {
@@ -1177,16 +1224,21 @@
                 //     await clearAllCookies();
                 //     console.log("AutoFlow: Opening new tab and closing this one...");
                 //     const url = window.location.href;
-                //     window.open(url, "_blank");
-                //     // Try to close; browsers block this for user-opened tabs
-                //     window.close();
-                //     // If still here after 500ms, navigate to about:blank to kill the old tab
-                //     await new Promise(resolve => setTimeout(resolve, 500));
-                //     location.replace("about:blank");
+                //     const newWin = window.open(url, "_blank");
+                //     if (newWin) {
+                //         window.close();
+                //         await new Promise(resolve => setTimeout(resolve, 500));
+                //         location.replace("about:blank");
+                //     } else {
+                //         console.log("AutoFlow: Popup blocked, redirecting current tab instead");
+                //         location.href = url;
+                //     }
                 //     return;
                 // }
                 ticketsAdded = false;
                 captchaSolved = false;
+                emailVerified = false;
+                sessionStorage.removeItem("emailVerified");
                 sessionStopwatchStart = 0;
                 sessionStorage.removeItem("sessionStopwatchStart");
                 console.log("AutoFlow: Stopwatch reset (step1 reached)");
@@ -1201,7 +1253,7 @@
                 let validateBtn;
                 try {
                     validateBtn = await waitForElement(
-                        "#ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_btnIrPaso1",
+                        "#ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_btnIrSubPaso1",
                         15000
                     );
                 } catch (e) {
@@ -1217,83 +1269,119 @@
                     console.log("AutoFlow: IrPaso1 button not found, might already be past captcha");
                 }
 
-                // if (manualCaptcha) {
-                //     console.log("AutoFlow: Manual captcha mode - solve captcha then press Confirm Captcha");
-                //     const confirmBtn = document.getElementById("btnConfirmCaptcha");
-                //     if (confirmBtn) confirmBtn.style.display = "block";
-                //     await new Promise(resolve => { manualCaptchaResolver = resolve; });
-                //     manualCaptchaResolver = null;
-                //     if (confirmBtn) confirmBtn.style.display = "none";
-                //     console.log("AutoFlow: Manual captcha confirmed by user");
-                //     captchaSolved = true;
-                //     sessionStorage.setItem("captchaSolved", "true");
-                // } else {
-                //     if (apiKey2Captcha) {
-                //         const captchaToken = await solve2Captcha();
-                //         if (captchaToken) {
-                //             console.log("AutoFlow: Injecting captcha token...");
-                //             const script = document.createElement("script");
-                //             script.textContent = `
-                //                 (function() {
-                //                     const token = "${captchaToken}";
-                //                     function patchRecaptcha() {
-                //                         if (!window.grecaptcha || !window.grecaptcha.getResponse) {
-                //                             setTimeout(patchRecaptcha, 300);
-                //                             return;
-                //                         }
-                //                         window.__orig_grecaptcha_getResponse =
-                //                             window.__orig_grecaptcha_getResponse ||
-                //                             window.grecaptcha.getResponse;
-                //                         window.grecaptcha.getResponse = function() { return token; };
-                //                     }
-                //                     patchRecaptcha();
-                //                 })();
-                //             `;
-                //             document.documentElement.appendChild(script);
-                //             script.remove();
-                //             console.log("AutoFlow: Captcha token injected successfully");
-                //             captchaSolved = true;
-                //             sessionStorage.setItem("captchaSolved", "true");
-                //         } else {
-                //             console.log("AutoFlow: Automatic captcha solving failed. Please solve manually.");
-                //             const solved = await waitForCaptchaSolved();
-                //             if (solved) {
-                //                 captchaSolved = true;
-                //                 sessionStorage.setItem("captchaSolved", "true");
-                //             } else {
-                //                 console.log("AutoFlow: Captcha not solved. Stopping.");
-                //                 location.reload();
-                //                 running = false;
-                //                 return;
-                //             }
-                //         }
-                //     } else {
-                //         console.log("AutoFlow: No API key set. Waiting for manual captcha solve...");
-                //         const solved = await waitForCaptchaSolved();
-                //         if (solved) {
-                //             captchaSolved = true;
-                //             sessionStorage.setItem("captchaSolved", "true");
-                //         } else {
-                //             console.log("AutoFlow: Captcha not solved. Stopping.");
-                //             running = false;
-                //             return;
-                //         }
-                //     }
-                // }
-                captchaSolved = true;
-                sessionStorage.setItem("captchaSolved", "true");
+                if (manualCaptcha) {
+                    console.log("AutoFlow: Manual captcha mode - solve captcha then press Confirm Captcha");
+                    const confirmBtn = document.getElementById("btnConfirmCaptcha");
+                    if (confirmBtn) confirmBtn.style.display = "block";
+                    await new Promise(resolve => { manualCaptchaResolver = resolve; });
+                    manualCaptchaResolver = null;
+                    if (confirmBtn) confirmBtn.style.display = "none";
+                    console.log("AutoFlow: Manual captcha confirmed by user");
+                    captchaSolved = true;
+                    sessionStorage.setItem("captchaSolved", "true");
+                } else {
+                    if (apiKey2Captcha) {
+                        const captchaToken = await solve2Captcha();
+                        if (captchaToken) {
+                            console.log("AutoFlow: Injecting captcha token...");
+                            const script = document.createElement("script");
+                            script.textContent = `
+                                (function() {
+                                    const token = "${captchaToken}";
+                                    function patchRecaptcha() {
+                                        if (!window.grecaptcha || !window.grecaptcha.getResponse) {
+                                            setTimeout(patchRecaptcha, 300);
+                                            return;
+                                        }
+                                        window.__orig_grecaptcha_getResponse =
+                                            window.__orig_grecaptcha_getResponse ||
+                                            window.grecaptcha.getResponse;
+                                        window.grecaptcha.getResponse = function() { return token; };
+                                    }
+                                    patchRecaptcha();
+                                })();
+                            `;
+                            document.documentElement.appendChild(script);
+                            script.remove();
+                            console.log("AutoFlow: Captcha token injected successfully");
+                            captchaSolved = true;
+                            sessionStorage.setItem("captchaSolved", "true");
+                        } else {
+                            console.log("AutoFlow: Automatic captcha solving failed. Please solve manually.");
+                            const solved = await waitForCaptchaSolved();
+                            if (solved) {
+                                captchaSolved = true;
+                                sessionStorage.setItem("captchaSolved", "true");
+                            } else {
+                                console.log("AutoFlow: Captcha not solved. Stopping.");
+                                location.reload();
+                                running = false;
+                                return;
+                            }
+                        }
+                    } else {
+                        console.log("AutoFlow: No API key set. Waiting for manual captcha solve...");
+                        const solved = await waitForCaptchaSolved();
+                        if (solved) {
+                            captchaSolved = true;
+                            sessionStorage.setItem("captchaSolved", "true");
+                        } else {
+                            console.log("AutoFlow: Captcha not solved. Stopping.");
+                            running = false;
+                            return;
+                        }
+                    }
+                }
+
                 console.log("AutoFlow: Captcha complete!");
-                // console.log("AutoFlow: Clicking Validate again to proceed to email verification...");
-                // const irPaso1BtnAfter = document.getElementById(
-                //     "ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_btnIrSubPaso1"
-                // );
-                // if (irPaso1BtnAfter) {
-                //     irPaso1BtnAfter.click();
-                //     console.log("AutoFlow: Validation clicked successfully");
-                // } else {
-                //     console.log("AutoFlow: Validation button not found after captcha");
-                // }
+                console.log("AutoFlow: Clicking Validate again to proceed to email verification...");
+                const irPaso1BtnAfter = document.getElementById(
+                    "ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_btnIrSubPaso1"
+                );
+                if (irPaso1BtnAfter) {
+                    irPaso1BtnAfter.click();
+                    console.log("AutoFlow: Validation clicked successfully");
+                } else {
+                    console.log("AutoFlow: Validation button not found after captcha");
+                }
                 await new Promise(resolve => setTimeout(resolve, 3000));
+
+                // EMAIL VERIFICATION STEP
+                if (!emailVerified) {
+                    if (manualEmail) {
+                        // Manual email verification: user does it themselves
+                        console.log("AutoFlow: Manual email verification mode - complete email verification then press Confirm Email");
+                        const confirmEmailBtn = document.getElementById("btnConfirmEmail");
+                        if (confirmEmailBtn) confirmEmailBtn.style.display = "block";
+                        await new Promise(resolve => { manualEmailResolver = resolve; });
+                        manualEmailResolver = null;
+                        if (confirmEmailBtn) confirmEmailBtn.style.display = "none";
+                        console.log("AutoFlow: Manual email verification confirmed by user");
+                        emailVerified = true;
+                        sessionStorage.setItem("emailVerified", "true");
+                    } else {
+                        // Auto email verification via Tigrmail
+                        console.log("AutoFlow: Starting automatic email verification...");
+                        const verified = await performEmailVerification();
+                        if (!verified) {
+                            console.log("AutoFlow: Email verification failed. Stopping.");
+                            running = false;
+                            return;
+                        }
+                        console.log("AutoFlow: Email verification passed!");
+                    }
+                    // Click btnIrPaso1 to go to the calendar page
+                    const irPaso1Btn = document.getElementById("ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_btnIrPaso1");
+                    if (irPaso1Btn) {
+                        console.log("AutoFlow: Clicking btnIrPaso1 to proceed to calendar...");
+                        irPaso1Btn.click();
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+                    } else {
+                        console.log("AutoFlow: btnIrPaso1 not found after email verification");
+                    }
+                } else {
+                    console.log("AutoFlow: Email already verified, skipping");
+                }
             } else {
                 console.log("AutoFlow: Captcha already solved, skipping");
             }
@@ -1553,6 +1641,7 @@
             <div style="${rowStyle}">
                 <button id="btnCaptchaMode" style="${btnStyle}">CAPTCHA: ${manualCaptcha ? 'MANUAL' : 'AUTO'}</button>
                 <button id="btnConfirmCaptcha" style="display:none;${btnStyle}background:#27ae60;font-weight:bold;">&#x2714; Confirm Captcha</button>
+                <button id="btnEmailMode" style="${btnStyle}">EMAIL: ${manualEmail ? 'MANUAL' : 'AUTO'}</button>
                 <button id="btnConfirmEmail" style="display:none;${btnStyle}background:#2980b9;font-weight:bold;">&#x2714; Confirm Email</button>
                 <button id="btnAutoFlow" style="${btnStyle}${autoFlow ? 'background:#1e8449;' : 'background:#c0392b;'}">AUTO: ${autoFlow ? 'ON' : 'OFF'}</button>
 
@@ -1582,7 +1671,7 @@
         // Update Doc ID display
         const docIdDisplay = document.getElementById("alhDocIdDisplay");
         if (docIdDisplay) {
-            docIdDisplay.textContent = `Doc ID: ${firebaseDocId || "Not set"}  |  Slot: ${findBestSlot ? `Rank #${bestSlotRank}` : (preferredTime ? `Preferred ${preferredTime}` : "default")}`;
+            docIdDisplay.textContent = `Doc ID: ${firebaseDocId || "Not set"}  |  Slot: ${findBestSlot ? `Rank #${bestSlotRank}` : (preferredTime ? `Preferred ${preferredTime}` : "default")}  |  Email: ${chosenEmail || "not picked yet"}`;
         }
 
         // Inject button UX styles
@@ -1696,6 +1785,14 @@
             console.log("Captcha mode:", manualCaptcha ? "MANUAL" : "AUTO");
         };
 
+        document.getElementById("btnEmailMode").onclick = () => {
+            manualEmail = !manualEmail;
+            sessionStorage.setItem("manualEmail", manualEmail);
+            document.getElementById("btnEmailMode").innerText =
+                `EMAIL: ${manualEmail ? 'MANUAL' : 'AUTO'}`;
+            console.log("Email mode:", manualEmail ? "MANUAL" : "AUTO");
+        };
+
         document.getElementById("btnConfirmCaptcha").onclick = () => {
             if (manualCaptchaResolver) {
                 manualCaptchaResolver();
@@ -1718,7 +1815,7 @@
                 ticketsAdded = false;
                 sessionStorage.setItem("ticketsAdded", "false");
                 sessionStorage.removeItem("flowStep");
-                //sessionStorage.removeItem("cookiesCleared");
+                sessionStorage.removeItem("cookiesCleared");
             }
 
             const btn = document.getElementById("btnAutoFlow");
@@ -1794,6 +1891,8 @@
             sessionStorage.setItem("captchaSolved", "false");
             ticketsAdded = false;
             sessionStorage.setItem("ticketsAdded", "false");
+            emailVerified = false;
+            sessionStorage.removeItem("emailVerified");
             sessionStorage.removeItem("flowStep");
             sessionStorage.removeItem("cookiesCleared");
 
@@ -1832,6 +1931,12 @@
             sessionStorage.removeItem("preferredTime");
             excludedDates = [];
             sessionStorage.removeItem("excludedDates");
+            manualEmail = false;
+            sessionStorage.removeItem("manualEmail");
+            chosenEmail = "";
+            chosenEmailAddressId = "";
+            sessionStorage.removeItem("chosenEmail");
+            sessionStorage.removeItem("chosenEmailAddressId");
             document.getElementById("btnAutoFlow").innerText = 'AUTO: OFF';
 
             console.log("RESET: Complete - All flags cleared");
@@ -1857,14 +1962,18 @@
             captchaSolved = sessionStorage.getItem("captchaSolved") === "true";
             ticketsAdded = sessionStorage.getItem("ticketsAdded") === "true";
             manualCaptcha = sessionStorage.getItem("manualCaptcha") === "true";
+            manualEmail = sessionStorage.getItem("manualEmail") === "true";
             numTeenTickets = sessionStorage.getItem("numTeenTickets") || "0";
             numChildTickets = sessionStorage.getItem("numChildTickets") || "0";
             selectedSlot = sessionStorage.getItem("selectedSlot") || "";
             firebaseFetched = sessionStorage.getItem("firebaseFetched") === "true";
             firebaseDocId = sessionStorage.getItem("firebaseDocId") || "";
+            emailVerified = sessionStorage.getItem("emailVerified") === "true";
             findBestSlot = sessionStorage.getItem("findBestSlot") !== "false";
             bestSlotRank = parseInt(sessionStorage.getItem("bestSlotRank"), 10) || 1;
             preferredTime = sessionStorage.getItem("preferredTime") || "";
+            chosenEmail = sessionStorage.getItem("chosenEmail") || "";
+            chosenEmailAddressId = sessionStorage.getItem("chosenEmailAddressId") || "";
             try {
                 const stored = sessionStorage.getItem("ticketHolders");
                 if (stored) firebaseDetails = JSON.parse(stored);
@@ -1951,7 +2060,6 @@
             }
             await fetchExcludedDates();
             dismissCookieBanner();
-            await loginUser();
             createPanel();
             // Flush buffered log messages
             const _logDiv = document.getElementById("alhLog");
