@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      200
+// @version      200.1
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -672,6 +672,55 @@
         }
 
         console.log("FillDetails: All ticket details filled!");
+    }
+
+    // --- Fill buyer (purchaser) fields with the first traveler's data ---
+    async function fillBuyerDetails(detailsData) {
+        const holders = detailsData || firebaseDetails;
+        if (!holders || holders.length === 0) {
+            console.log("FillBuyer: No ticket holders data, skipping fill");
+            return false;
+        }
+        const buyer = holders[0];
+        const pfx = "ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_personasConfiguracionCampos";
+
+        const fillText = async (id, value, delay = 300) => {
+            const el = document.getElementById(id);
+            if (!el) { console.log(`FillBuyer: Field not found: ${id}`); return; }
+            el.focus();
+            el.value = value;
+            el.dispatchEvent(new Event("input",  { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            el.blur();
+            await new Promise(resolve => setTimeout(resolve, delay));
+        };
+
+        const fillSelect = async (id, value, delay = 500) => {
+            const el = document.getElementById(id);
+            if (!el) { console.log(`FillBuyer: Dropdown not found: ${id}`); return; }
+            el.value = value;
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            await new Promise(resolve => setTimeout(resolve, delay));
+        };
+
+        try {
+            await waitForElement(`#${pfx}_txtNombre`, 10000);
+        } catch (e) {
+            console.log("FillBuyer: Buyer form not found:", e);
+            return false;
+        }
+
+        // Spanish mobile format: 6XXXXXXXX
+        const phone = "6" + Math.floor(Math.random() * 100000000).toString().padStart(8, "0");
+
+        console.log(`FillBuyer: Filling buyer ${buyer.firstName} ${buyer.lastName}`);
+        await fillText(`${pfx}_txtNombre`,    buyer.firstName);
+        await fillText(`${pfx}_txtApellidos`, buyer.lastName);
+        await fillSelect(`${pfx}_cboTipoDNI`, "otro_id");
+        await fillText(`${pfx}_txtDNI`,       buyer.idNumber);
+        await fillText(`${pfx}_txtTelefono`,  phone);
+        console.log("FillBuyer: Done (phone:", phone, ")");
+        return true;
     }
 
     // --- Detect which booking step the page is currently showing ---
@@ -1657,6 +1706,7 @@
                 <input id="inputFillDocId" type="text" placeholder="Firebase Doc ID" style="${inputStyle}width:160px;" value="${firebaseDocId}" />
                 <span style="color:#f0c040;font-size:13px;font-weight:bold;margin-left:4px;" id="alhDateDisplay">${dateValue ? new Date(2000, 0, 1 + Number(dateValue)).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "No date"}</span>
                 <button id="btnFillDetails" style="${btnStyle}background:#8e44ad;font-weight:bold;">&#x270D; Fill Details</button>
+                <button id="btnFillBuyer" style="${btnStyle}background:#2980b9;font-weight:bold;">&#x1F464; Fill Buyer</button>
                 <button id="btnGoStep4" style="${btnStyle}background:#27ae60;font-weight:bold;">&#x2192; Go to Step 4</button>
             </div>
 
@@ -1862,6 +1912,31 @@
             btnReady("btnFillDetails", "✔ Filled!");
             console.log("FillDetails: Done! You can now click 'Go to Step 4'.");
             setTimeout(() => btnReady("btnFillDetails"), 4000);
+        };
+
+        // --- FILL BUYER BUTTON ---
+        document.getElementById("btnFillBuyer").onclick = async () => {
+            const docId = document.getElementById("inputFillDocId").value.trim();
+            if (!docId) {
+                console.log("FillBuyer: No Doc ID entered!");
+                return;
+            }
+
+            btnBusy("btnFillBuyer", "⏳ Fetching…");
+            const data = await fetchFirebaseData(docId);
+
+            if (data.error || data.ticketHolders.length === 0) {
+                console.log("FillBuyer: No ticket holders found or fetch error");
+                btnReady("btnFillBuyer", "✘ Error");
+                setTimeout(() => btnReady("btnFillBuyer"), 3000);
+                return;
+            }
+
+            btnBusy("btnFillBuyer", "⏳ Filling…");
+            const ok = await fillBuyerDetails(data.ticketHolders);
+
+            btnReady("btnFillBuyer", ok ? "✔ Filled!" : "✘ Error");
+            setTimeout(() => btnReady("btnFillBuyer"), 4000);
         };
 
         // --- GO TO STEP 4 BUTTON ---
