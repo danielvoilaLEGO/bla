@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      201
+// @version      201.3
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
 // @grant        GM_xmlhttpRequest
@@ -32,6 +32,9 @@
     let firebaseFetched = sessionStorage.getItem("firebaseFetched") === "true";
     let sessionStopwatchStart = parseInt(sessionStorage.getItem("sessionStopwatchStart"), 10) || 0;
     const SESSION_TIMEOUT_MS = 27 * 60 * 1000;
+    // --- Scheduled precise Step-2 fire time in UTC ("HH:MM:SS"). Empty = disabled ---
+    const TARGET_UTC_TIME = "20:00:02"; // e.g. "15:00:02"
+    const TARGET_ARM_WINDOW_MS = 12000; // start holding this long before target
     let running = false;
         let excludedDates = [];
     try {
@@ -517,6 +520,17 @@
     function timeToMinutes(t) {
         const parts = t.split(":").map(Number);
         return parts[0] * 60 + (parts[1] || 0);
+    }
+
+    // --- Milliseconds until today's TARGET_UTC_TIME (negative if disabled/past) ---
+    function msUntilTargetUTC() {
+        if (!TARGET_UTC_TIME) return -1;
+        const parts = TARGET_UTC_TIME.split(":").map(Number);
+        if (parts.length < 3 || parts.some(isNaN)) return -1;
+        const [h, m, s] = parts;
+        const now = new Date();
+        const target = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, m, s, 0);
+        return target - now.getTime();
     }
 
     // --- Pick best slot ---
@@ -1054,7 +1068,7 @@
                 console.log("EmailVerify: Failed to pick random inbox from OpenInbox:", e);
                 return false;
             }
-
+            
         console.log("EmailVerify: Using email:", emailAddr, "(id:", emailAddressId, ")");
 
         // Step 2: Wait for the email input field to appear
@@ -1063,7 +1077,8 @@
         try {
             emailInput = await waitForElement("#ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_txtEmailValidacion", 10000);
         } catch (e) {
-            console.log("EmailVerify: Email input field not found:", e);
+            console.log("EmailVerify: Email input field not found, reloading page:", e);
+            location.reload();
             return false;
         }
 
@@ -1073,6 +1088,7 @@
         emailInput.dispatchEvent(new Event("change", { bubbles: true }));
         console.log("EmailVerify: Email filled:", emailAddr);
         await new Promise(resolve => setTimeout(resolve, 500));
+        const sentAt = new Date(Date.now() - 5000).toISOString();
 
         // Step 4: Click the send button
         const sendBtn = document.getElementById("ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_btnEnviarMailValidacion");
@@ -1080,7 +1096,6 @@
             console.log("EmailVerify: Send button not found");
             return false;
         }
-        const sentAt = new Date().toISOString();
         sendBtn.click();
         console.log("EmailVerify: Send button clicked at", sentAt, ", waiting for email...");
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -1335,7 +1350,7 @@
             if (page === "step1") {
                 // if (!sessionStorage.getItem("cookiesCleared")) {
                 //     console.log("AutoFlow: On step1, clearing session via new tab...");
-
+                    
                 //     // Save all session data to localStorage so the new tab can restore it
                 //     const transfer = {};
                 //     for (let i = 0; i < sessionStorage.length; i++) {
@@ -1645,6 +1660,15 @@
                         sessionStorage.setItem("cookiesCleared", "1");
                         location.href = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
                         return;
+                    }
+
+                    // Scheduled precise fire: when the target UTC time is approaching,
+                    // hold and click Step 2 exactly at that moment (runs normally otherwise)
+                    const msToTarget = msUntilTargetUTC();
+                    if (msToTarget > 0 && msToTarget <= TARGET_ARM_WINDOW_MS) {
+                        console.log(`AutoFlow: Scheduled fire armed — holding ${(msToTarget / 1000).toFixed(1)}s until ${TARGET_UTC_TIME} UTC`);
+                        await new Promise(resolve => setTimeout(resolve, msToTarget));
+                        console.log("AutoFlow: Scheduled time reached — firing Step 2 now!");
                     }
 
                     console.log("AutoFlow: Clicking Step 2");
