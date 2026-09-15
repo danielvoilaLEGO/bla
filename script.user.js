@@ -34,7 +34,7 @@
     const SESSION_TIMEOUT_MS = 27 * 60 * 1000;
     // --- Scheduled precise Step-2 fire time in UTC ("HH:MM:SS"). Empty = disabled ---
     const TARGET_UTC_TIME = "20:00:00"; // e.g. "15:00:02"
-    const TARGET_ARM_WINDOW_MS = 60000; // start holding this long before target
+    const TARGET_ARM_WINDOW_MS = 180000; // start holding this long before target
     let running = false;
         let excludedDates = [];
     try {
