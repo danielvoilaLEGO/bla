@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         ALH Semi-Auto
 // @namespace    http://tampermonkey.net/
-// @version      201.3
+// @version      201.4
 // @description  Semi-auto flow: searches tickets + selects hour, stops at details for manual fill
 // @match        https://compratickets.alhambra-patronato.es/reservarEntradas.aspx*
+// @match        https://compratickets.alhambra-patronato.es/errorCompra*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_cookie
 // @grant        window.close
@@ -32,9 +33,15 @@
     let firebaseFetched = sessionStorage.getItem("firebaseFetched") === "true";
     let sessionStopwatchStart = parseInt(sessionStorage.getItem("sessionStopwatchStart"), 10) || 0;
     const SESSION_TIMEOUT_MS = 27 * 60 * 1000;
-    // --- Scheduled precise Step-2 fire time in UTC ("HH:MM:SS"). Empty = disabled ---
-    const TARGET_UTC_TIME = "20:00:00"; // e.g. "15:00:02"
-    const TARGET_ARM_WINDOW_MS = 180000; // start holding this long before target
+    // --- Scheduled precise Step-2 fire time in UTC ("HH:MM:SS" or "HH:MM:SS.mmm"). Empty = disabled ---
+    const TARGET_UTC_TIME = "20:00:00.500"; // e.g. "15:00:02" or "20:00:00.500" (500 ms)
+    const TARGET_ARM_WINDOW_MS = 60000; // start holding this long before target
+    const START_URL = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
+    // --- Purchase error page / email-send error: keep only these sessionStorage keys, wipe the rest + cookies, restart ---
+    const PRESERVE_ON_RESTART = ["firebaseDocId", "autoFlow"];
+    // --- HTTP error pages that just get a plain refresh ---
+    const RELOAD_ON_HTTP_STATUS = [429, 504];
+    const ERROR_RELOAD_DELAY_MS = 3000;
     let running = false;
         let excludedDates = [];
     try {
@@ -515,6 +522,64 @@
         console.log(`ClearCookies: Remaining document.cookie: "${document.cookie}"`);
     }
 
+    // --- Purchase error page: "no ha podido confirmarse tu compra" ---
+    function isPurchaseErrorPage() {
+        return /^\/errorCompra/i.test(location.pathname);
+    }
+
+    // --- "An error occurred while sending the email. Reload the page to try again." ---
+    function isEmailSendError() {
+        const span = document.getElementById("ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_lblAvisoValidacionTexto");
+        return !!span && span.textContent.toLowerCase().includes("error");
+    }
+
+    // --- Watch for the email-send error appearing at any point (it arrives via partial postback, no page load) ---
+    function watchForEmailSendError() {
+        const observer = new MutationObserver(() => {
+            if (isEmailSendError()) {
+                observer.disconnect();
+                resetSessionAndRestart("Email send error");
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    // --- Save preserved keys, wipe session + cookies, re-inject keys, restart booking ---
+    let restarting = false;
+    async function resetSessionAndRestart(reason) {
+        if (restarting) return;
+        restarting = true;
+        console.log(`Restart: ${reason} — resetting session and restarting booking`);
+        const saved = {};
+        for (const key of PRESERVE_ON_RESTART) {
+            const value = sessionStorage.getItem(key);
+            if (value !== null) saved[key] = value;
+        }
+        sessionStorage.clear();
+        await clearAllCookies();
+        for (const [key, value] of Object.entries(saved)) {
+            sessionStorage.setItem(key, value);
+        }
+        console.log("Restart: Kept", JSON.stringify(saved), "— reloading booking page in 2s...");
+        setTimeout(() => {
+            location.href = START_URL;
+        }, 2000);
+    }
+
+    // --- Returns the HTTP status if this page is a 429/504 error page, else 0 ---
+    function detectHttpErrorStatus() {
+        const nav = performance.getEntriesByType("navigation")[0];
+        if (nav && RELOAD_ON_HTTP_STATUS.includes(nav.responseStatus)) {
+            return nav.responseStatus;
+        }
+        // Fallback: error pages served with a 200 status
+        const heading = document.querySelector("h1, h2");
+        const text = document.title + " " + (heading ? heading.textContent : "");
+        const fromText = /\b429\b|Too Many Requests/i.test(text) ? 429
+                       : /\b504\b|Gateway Time-?out/i.test(text) ? 504 : 0;
+        return RELOAD_ON_HTTP_STATUS.includes(fromText) ? fromText : 0;
+    }
+
 
     // --- Convert "HH:MM" to minutes since midnight ---
     function timeToMinutes(t) {
@@ -525,11 +590,16 @@
     // --- Milliseconds until today's TARGET_UTC_TIME (negative if disabled/past) ---
     function msUntilTargetUTC() {
         if (!TARGET_UTC_TIME) return -1;
-        const parts = TARGET_UTC_TIME.split(":").map(Number);
-        if (parts.length < 3 || parts.some(isNaN)) return -1;
-        const [h, m, s] = parts;
+        const parts = TARGET_UTC_TIME.split(":");
+        if (parts.length < 3) return -1;
+        const h = Number(parts[0]);
+        const m = Number(parts[1]);
+        const secFloat = Number(parts[2]); // supports fractional seconds, e.g. "00.500"
+        if ([h, m, secFloat].some(isNaN)) return -1;
+        const s = Math.floor(secFloat);
+        const ms = Math.round((secFloat - s) * 1000);
         const now = new Date();
-        const target = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, m, s, 0);
+        const target = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, m, s, ms);
         return target - now.getTime();
     }
 
@@ -871,10 +941,11 @@
     }
 
     // --- Fetch excluded dates from Firebase ---
-    async function fetchExcludedDates() {
-        if (excludedDates.length > 0) {
+    // force=true bypasses the sessionStorage cache (used by the "Reload Excluded" button)
+    async function fetchExcludedDates(force = false) {
+        if (!force && excludedDates.length > 0) {
             console.log("ExcludedDates: Using cached excluded dates:", excludedDates.join(", "));
-            return;
+            return true;
         }
         console.log("ExcludedDates: Fetching from Firebase...");
         return new Promise((resolve) => {
@@ -884,21 +955,25 @@
                 onload: (response) => {
                     try {
                         const data = JSON.parse(response.responseText);
-                        if (data.fields && data.fields.dates && data.fields.dates.stringValue) {
-                            excludedDates = data.fields.dates.stringValue.split(",").map(d => d.trim()).filter(d => d);
-                            sessionStorage.setItem("excludedDates", JSON.stringify(excludedDates));
-                            console.log("ExcludedDates: Loaded excluded dates:", excludedDates.join(", "));
-                        } else {
-                            console.log("ExcludedDates: No 'dates' field found or empty");
+                        if (data.error) {
+                            // Keep the current list on API errors
+                            console.log("ExcludedDates: Firebase error:", data.error.message);
+                            resolve(false);
+                            return;
                         }
+                        const raw = data.fields && data.fields.dates && data.fields.dates.stringValue;
+                        excludedDates = raw ? raw.split(",").map(d => d.trim()).filter(d => d) : [];
+                        sessionStorage.setItem("excludedDates", JSON.stringify(excludedDates));
+                        console.log("ExcludedDates: Loaded excluded dates:", excludedDates.join(", ") || "none");
+                        resolve(true);
                     } catch (e) {
                         console.log("ExcludedDates: Parse error:", e);
+                        resolve(false);
                     }
-                    resolve();
                 },
                 onerror: () => {
                     console.log("ExcludedDates: Network error");
-                    resolve();
+                    resolve(false);
                 }
             });
         });
@@ -1101,32 +1176,9 @@
         await new Promise(resolve => setTimeout(resolve, 2000));
 
         // Check for email send error
-        const errorSpan = document.getElementById("ctl00_ContentMaster1_ucReservarEntradasBaseAlhambra1_lblAvisoValidacionTexto");
-        if (errorSpan && errorSpan.textContent.toLowerCase().includes("error")) {
-            console.log("EmailVerify: ERROR detected — email send failed:", errorSpan.textContent.trim());
-            console.log("EmailVerify: Clearing cookies and restarting via new tab...");
-            const transfer = {};
-            for (let i = 0; i < sessionStorage.length; i++) {
-                const key = sessionStorage.key(i);
-                transfer[key] = sessionStorage.getItem(key);
-            }
-            transfer["captchaSolved"] = "false";
-            transfer["emailVerified"] = "false";
-            delete transfer["cookiesCleared"];
-            localStorage.setItem("alhTransfer", JSON.stringify(transfer));
-            await clearAllCookies();
-            location.reload();
-            // console.log("EmailVerify: Opening new tab and closing this one...");
-            // const url = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
-            // const newWin = window.open(url, "_blank");
-            // if (newWin) {
-            //     window.close();
-            //     await new Promise(resolve => setTimeout(resolve, 500));
-            //     location.replace("about:blank");
-            // } else {
-            //     console.log("EmailVerify: Popup blocked, redirecting current tab instead");
-            //     location.href = url;
-            // }
+        if (isEmailSendError()) {
+            console.log("EmailVerify: ERROR detected — email send failed");
+            await resetSessionAndRestart("Email send error");
             return false;
         }
 
@@ -1236,7 +1288,7 @@
                 console.log("AutoFlow: 403 Forbidden detected, restarting flow in 3s...");
                 running = false;
                 setTimeout(() => {
-                    location.href = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
+                    location.href = START_URL;
                 }, 3000);
                 return;
             }
@@ -1658,7 +1710,7 @@
                         sessionStorage.removeItem("sessionStopwatchStart");
                         // Mark cookies as already cleared so step1 won't do new-tab dance again
                         sessionStorage.setItem("cookiesCleared", "1");
-                        location.href = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
+                        location.href = START_URL;
                         return;
                     }
 
@@ -1801,6 +1853,7 @@
 
                 <span style="color:#444;margin:0 4px">|</span>
 
+                <button id="btnReloadExcluded" style="${btnStyle}background:#b9770e;" title="Re-fetch excluded dates from Firebase (keeps session)">&#x21bb; Excluded Dates</button>
                 <button id="btnReset" style="${btnStyle}background:#c0392b;">RESET</button>
             </div>
 
@@ -1983,6 +2036,14 @@
 
         if (autoFlow) document.getElementById("btnAutoFlow").classList.add("alh-running");
 
+        // --- RELOAD EXCLUDED DATES (no session reset; running flow picks it up on its next Step 2 loop) ---
+        document.getElementById("btnReloadExcluded").onclick = async () => {
+            btnBusy("btnReloadExcluded", "⏳…");
+            const ok = await fetchExcludedDates(true);
+            btnReady("btnReloadExcluded", ok ? `✔ ${excludedDates.length} excluded` : "✘ Error");
+            setTimeout(() => btnReady("btnReloadExcluded"), 3000);
+        };
+
         // --- FILL DETAILS BUTTON (Semi-Auto feature) ---
         document.getElementById("btnFillDetails").onclick = async () => {
             const docId = document.getElementById("inputFillDocId").value.trim();
@@ -2126,7 +2187,7 @@
 
             console.log("RESET: Complete - All flags cleared");
 
-            location.href = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
+            location.href = START_URL;
         };
     }
 
@@ -2178,6 +2239,27 @@
         if (document.body) {
 
             clearInterval(wait);
+
+            // Purchase error page → keep doc ID, wipe session + cookies, restart booking
+            if (isPurchaseErrorPage()) {
+                await resetSessionAndRestart("Purchase error page");
+                return;
+            }
+
+            // 429 / 504 → plain refresh (replace() instead of reload() avoids the POST-resubmit prompt)
+            const httpErrorStatus = detectHttpErrorStatus();
+            if (httpErrorStatus) {
+                console.log(`Init: HTTP ${httpErrorStatus} page detected, refreshing in ${ERROR_RELOAD_DELAY_MS / 1000}s...`);
+                setTimeout(() => location.replace(location.href), ERROR_RELOAD_DELAY_MS);
+                return;
+            }
+
+            // Email-send error → same reset as the purchase error page (already on screen, or appearing later)
+            if (isEmailSendError()) {
+                await resetSessionAndRestart("Email send error on page load");
+                return;
+            }
+            watchForEmailSendError();
 
             // Early check: if stuck on "Checking Your Browser" page, reload immediately
             const _h2s = document.querySelectorAll("h2");
