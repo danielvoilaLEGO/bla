@@ -34,7 +34,7 @@
     let sessionStopwatchStart = parseInt(sessionStorage.getItem("sessionStopwatchStart"), 10) || 0;
     const SESSION_TIMEOUT_MS = 27 * 60 * 1000;
     // --- Scheduled precise Step-2 fire time in UTC ("HH:MM:SS" or "HH:MM:SS.mmm"). Empty = disabled ---
-    const TARGET_UTC_TIME = "20:00:00.500"; // e.g. "15:00:02" or "20:00:00.500" (500 ms)
+    const TARGET_UTC_TIME = "20:00:00.000"; // e.g. "15:00:02" or "20:00:00.500" (500 ms)
     const TARGET_ARM_WINDOW_MS = 60000; // start holding this long before target
     const START_URL = "https://compratickets.alhambra-patronato.es/reservarEntradas.aspx?opc=142&gid=432&lg=en-GB&ca=0&m=GENERAL";
     // --- Purchase error page / email-send error: keep only these sessionStorage keys, wipe the rest + cookies, restart ---
